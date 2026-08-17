@@ -89,22 +89,26 @@ extern "C" [[noreturn]] void Main()
                 HAL_Delay(50);
                 MCRSBPtr->RunTaskTime(MoveDirection::Left,200.0f);//x1150y0
                 gm65.ReceiveDMA((uint8_t *)scaner_message,15);
-                if (scaner_message[14] != 0) {
-                    robot.state =RobotState::WaitQr;
-                }
+                while(HAL_UART_GetState(&huart1)==HAL_UART_STATE_BUSY_RX);
+                robot.state =RobotState::WaitQr;
                 break;
 
             case RobotState::WaitQr:
                 sscanf(scaner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_message+0,mission_message+1,
                         mission_message+2,mission_message+3,mission_message+4,mission_message+5,mission_message+6,mission_message+7,mission_message+8,
                         mission_message+9,mission_message+10,mission_message+11);
-                print("%s=\"%s\"\xff\xff\xff",HMI_txtcontrol,scaner_message);
                 for (uint8_t i = 0; i < 3; i++) {
                     robot.mission.batchColor[0][i] = mission_message[i];
                     robot.mission.roughSlot[0][i] = mission_message[i+3];
                     robot.mission.batchColor[1][i] = mission_message[i+6];
                     robot.mission.roughSlot[1][i] = mission_message[i+9];
                 }
+                robot.state = RobotState::ParseQr;
+                break;
+
+            case RobotState::ParseQr:
+                print("%s=\"%s\"\xff\xff\xff",HMI_txtcontrol,scaner_message);
+                robot.state = RobotState::GoRaw;
                 break;
         }
 
