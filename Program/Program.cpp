@@ -14,6 +14,7 @@
 #include "tim.h"
 #include "usart.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -45,10 +46,11 @@ constexpr auto PLATE_THIRD = 228;
 void Init()
 {
     constexpr auto radius = 37.5;
-    constexpr auto distance = 100;
+    const auto distance = std::sqrt(105 * 105 + 105 * 105);
     constexpr uint8_t address[4] = {1,2,3,4};
     constexpr bool dirs[4] = {false,false,false,false};
     const GPIOPin<Output> flowControlPin(GPIOF,GPIO_PIN_8);
+    robot.state = RobotState::Zero;
 
     gimbal.Start();
     plate.Start();
@@ -65,26 +67,46 @@ extern "C" [[noreturn]] void Main()
 
     Init();
 
-    plate.SetCompare(PLATE_FRIST);
-    HAL_Delay(50);
-    gimbal.SetCompare(GIMBAL_PLACE);
-    HAL_Delay(50);
-    arm.SetCompare(ARM_PLACE);
-    HAL_Delay(50);
-
-    MCRSBPtr->RunTaskTime(MoveDirection::Forward,500.0f);
-    MCRSBPtr->RunTaskTime(MoveDirection::Right,500.0f);
-
-    gm65.ReceiveDMA((uint8_t *)scaner_message,15);
-
-    sscanf(scaner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_message+0,mission_message+1,
-        mission_message+2,mission_message+3,mission_message+4,mission_message+5,mission_message+6,mission_message+7,mission_message+8,mission_message+9,
-        mission_message+10,mission_message+11);
-
-    print("%s=\"%s\"\xff\xff\xff",HMI_txtcontrol,scaner_message);
+    // MCRSBPtr->RunTaskTime(MoveDirection::Right,1065.0f);//x85y0
+    // MCRSBPtr->RunTaskTime(MoveDirection::Forward,995.0f);
+    // HAL_Delay(50);
+    // MCRSBPtr->RunTaskTime(MoveDirection::Forward,200.0f);
 
     for (;;) {
+        switch (robot.state) {
+            case RobotState::Zero:
+                plate.SetCompare(PLATE_FRIST);
+                HAL_Delay(50);
+                gimbal.SetCompare(GIMBAL_PLACE);
+                HAL_Delay(50);
+                arm.SetCompare(ARM_PLACE);
+                HAL_Delay(50);
+                robot.state = RobotState::GoQr;
+                break;
 
+            case RobotState::GoQr:
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,950.0f);
+                HAL_Delay(50);
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,200.0f);//x1150y0
+                gm65.ReceiveDMA((uint8_t *)scaner_message,15);
+                if (scaner_message[14] != 0) {
+                    robot.state =RobotState::WaitQr;
+                }
+                break;
+
+            case RobotState::WaitQr:
+                sscanf(scaner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_message+0,mission_message+1,
+                        mission_message+2,mission_message+3,mission_message+4,mission_message+5,mission_message+6,mission_message+7,mission_message+8,
+                        mission_message+9,mission_message+10,mission_message+11);
+                print("%s=\"%s\"\xff\xff\xff",HMI_txtcontrol,scaner_message);
+                for (uint8_t i = 0; i < 3; i++) {
+                    robot.mission.batchColor[0][i] = mission_message[i];
+                    robot.mission.roughSlot[0][i] = mission_message[i+3];
+                    robot.mission.batchColor[1][i] = mission_message[i+6];
+                    robot.mission.roughSlot[1][i] = mission_message[i+9];
+                }
+                break;
+        }
 
 
     }
