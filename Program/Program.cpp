@@ -26,11 +26,21 @@ using namespace Platform::Chassis;
 const auto bus = Uart<DMA>(&huart4);
 const auto gm65 = Uart<DMA>(&huart1);//9600
 const auto HMI = Uart<Normal>(&huart2);
-const auto plate =
-char HMI_txtcontrol[7] = {"t1.txt"};
+const auto gimbal = PwmChannel<Normal>(&htim1,TIM_CHANNEL_1);
+const auto plate = PwmChannel<Normal>(&htim1,TIM_CHANNEL_2);
+const auto arm = PwmChannel<Normal>(&htim2,TIM_CHANNEL_1);
 
+char HMI_txtcontrol[7] = {"t1.txt"};
 char scaner_message[15] = {0};
 uint8_t mission_message[12] = {0};
+
+constexpr auto GIMBAL_GRAB = 75;
+constexpr auto GIMBAL_PLACE = 181;
+constexpr auto ARM_GRAB = 131;
+constexpr auto ARM_PLACE = 100;
+constexpr auto PLATE_FRIST = 50;
+constexpr auto PLATE_SECOND =138;
+constexpr auto PLATE_THIRD = 228;
 
 void Init()
 {
@@ -39,6 +49,10 @@ void Init()
     constexpr uint8_t address[4] = {1,2,3,4};
     constexpr bool dirs[4] = {false,false,false,false};
     const GPIOPin<Output> flowControlPin(GPIOF,GPIO_PIN_8);
+
+    gimbal.Start();
+    plate.Start();
+    arm.Start();
 
     MecanumChassis<RS485Bus>::Create(
         address, &bus, flowControlPin, 16, dirs, true, radius, distance);
@@ -51,11 +65,17 @@ extern "C" [[noreturn]] void Main()
 
     Init();
 
-    gm65.ReceiveDMA((uint8_t *)scaner_message,15);
+    plate.SetCompare(PLATE_FRIST);
+    HAL_Delay(50);
+    gimbal.SetCompare(GIMBAL_PLACE);
+    HAL_Delay(50);
+    arm.SetCompare(ARM_PLACE);
+    HAL_Delay(50);
 
-    MCRSBPtr->RunTaskTime(MoveDirection::Left,500.0f);
-
+    MCRSBPtr->RunTaskTime(MoveDirection::Forward,500.0f);
     MCRSBPtr->RunTaskTime(MoveDirection::Right,500.0f);
+
+    gm65.ReceiveDMA((uint8_t *)scaner_message,15);
 
     sscanf(scaner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_message+0,mission_message+1,
         mission_message+2,mission_message+3,mission_message+4,mission_message+5,mission_message+6,mission_message+7,mission_message+8,mission_message+9,
