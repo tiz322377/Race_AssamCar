@@ -13,6 +13,10 @@
 
 #include <cstdint>
 
+extern volatile uint16_t PULSE_TARGET;  // 目标脉冲数
+extern volatile uint16_t PULSE_COUNT;   // 当前已发脉冲数
+extern volatile uint8_t MOTOR_STOPPED;  // 停止标志，1表示已完成
+
 enum class RobotState : uint8_t {
     Zero,
 
@@ -58,5 +62,6 @@ struct RobotContext {
 static RobotContext robot;
 
 void print(const char*format,...);
+void Motor_Move_Steps(uint16_t steps);
 
 #endif //PROGRAM_HPP

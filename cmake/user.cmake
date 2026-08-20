@@ -9,7 +9,8 @@ add_library(UserLib)
 target_sources(UserLib PRIVATE ${USER_SOURCES})
 
 include_directories(
-        "User","Program"
+        "User"
+        "Program"
 )
 
 target_link_libraries(UserLib PRIVATE stm32cubemx)
