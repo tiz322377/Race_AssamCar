@@ -12,14 +12,22 @@
 #include "Peripheral/TIM.hpp"
 
 #include <cstdint>
+#include <cstdbool>
 
-extern volatile uint16_t PULSE_TARGET;  // 目标脉冲数
-extern volatile uint16_t PULSE_COUNT;   // 当前已发脉冲数
-extern volatile uint8_t MOTOR_STOPPED;  // 停止标志，1表示已完成
+extern volatile uint32_t PULSE_TARGET;  // 目标脉冲数
+extern volatile uint32_t PULSE_COUNT;   // 当前已发脉冲数
+extern volatile bool PULSE_COMPLETED; //已完成标志
+
+enum Dir : uint8_t
+{
+    Up,
+    Down,
+};
 
 enum class RobotState : uint8_t {
     Zero,
 
+    // Qr,
     GoQr,
     WaitQr,
     ParseQr,
@@ -39,6 +47,14 @@ enum class RobotState : uint8_t {
     Fault
 };
 
+enum class ActionState : uint8_t{
+    Enter,
+
+    Go,
+    Wait,
+    Parse,
+};
+
 struct Mission {
     // batchColor[批次][搬运顺序]
     uint8_t batchColor[2][3]{};
@@ -49,6 +65,7 @@ struct Mission {
 
 struct RobotContext {
     RobotState state = RobotState::Zero;
+    ActionState step = ActionState::Enter;
     Mission mission{};
 
     uint8_t batch = 0;   // 0：第一批，1：第二批
@@ -62,6 +79,6 @@ struct RobotContext {
 static RobotContext robot;
 
 void print(const char*format,...);
-void Motor_Move_Steps(uint16_t steps);
+void Elevation_Move(double distance,Dir dir);
 
 #endif //PROGRAM_HPP

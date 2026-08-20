@@ -31,7 +31,7 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdbool.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -59,7 +59,9 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
-
+extern volatile uint32_t PULSE_TARGET;  // 目标脉冲数
+extern volatile uint32_t PULSE_COUNT;   // 当前已发脉冲数
+extern volatile bool PULSE_COMPLETED; //已完成标志
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

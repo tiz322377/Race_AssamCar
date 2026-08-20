@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "stdarg.h"
+
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -165,7 +167,19 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+    if ((htim->Instance == TIM2) &&
+        (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)) {
 
+        PULSE_COUNT++;
+
+        if (PULSE_COUNT >= PULSE_TARGET) {
+            HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+            PULSE_COMPLETED = true;
+        }
+        }
+}
 /* USER CODE END 4 */
 
 /**

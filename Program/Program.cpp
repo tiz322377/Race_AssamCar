@@ -41,13 +41,13 @@ char camera_message[14] = {0};
 uint8_t mission_data[12] = {0};
 int8_t camera_data[3] = {0};
 
-volatile uint16_t PULSE_TARGET = 0;
-volatile uint16_t PULSE_COUNT = 0;
-volatile uint8_t MOTOR_STOPPED = 1;
+volatile uint32_t PULSE_TARGET = 0;
+volatile uint32_t PULSE_COUNT = 0;
+volatile bool PULSE_COMPLETED = false;
 constexpr auto GIMBAL_GRAB = 75;
 constexpr auto GIMBAL_PLACE = 181;
-constexpr auto ARM_GRAB = 131;
-constexpr auto ARM_PLACE = 100;
+constexpr auto ARM_GRAB = 250;
+constexpr auto ARM_PLACE = 220;
 constexpr auto PLATE_FIRST = 50;
 constexpr auto PLATE_SECOND =138;
 constexpr auto PLATE_THIRD = 228;
@@ -66,7 +66,7 @@ void Init()
     arm.Start();
 
     en_elevation.Write(GPIO_PIN_SET);
-    dir_elevation.Write(GPIO_PIN_RESET);
+    step_elevation.SetCompare(1000);
 
     MecanumChassis<RS485Bus>::Create(
         address, &bus, flowControlPin, 16, dirs, true, radius, distance);
@@ -78,8 +78,6 @@ extern "C" [[noreturn]] void Main()
 {
 
     Init();
-
-    Motor_Move_Steps(3600);
 
     for (;;) {
         switch (robot.state) {
@@ -127,14 +125,56 @@ extern "C" [[noreturn]] void Main()
                 robot.state = RobotState::GrabRaw;
 
             case RobotState::GrabRaw:
+                gimbal.SetCompare(GIMBAL_GRAB);
+                HAL_Delay(50);
+                Elevation_Move(28.6,Down);
                 camera.ReceiveDMA((uint8_t *)camera_message,14);
                 HAL_Delay(50);
                 sscanf(camera_message,"#%hhd,%hhd,%hhd",camera_data+0,camera_data+1,camera_data+2);
+                if (camera_data[0] == robot.mission.batchColor[0][0]) {
+                    arm.SetCompare(ARM_GRAB);
+                    HAL_Delay(50);
+                    Elevation_Move(14.3,Up);
+                    while (PULSE_COMPLETED == true) {
+                        gimbal.SetCompare(GIMBAL_PLACE);
+                        HAL_Delay(50);
+                        arm.SetCompare(ARM_PLACE);
+                        HAL_Delay(50);
+                        plate.SetCompare(PLATE_SECOND);
+                        HAL_Delay(50);
+                    }
+                }
         }
 
 
     }
 }
+
+// void RobotEvent()
+// {
+//     switch (robot.state) {
+//         case RobotState::Zero:
+//             plate.SetCompare(PLATE_FIRST);
+//             HAL_Delay(50);
+//             gimbal.SetCompare(GIMBAL_PLACE);
+//             HAL_Delay(50);
+//             arm.SetCompare(ARM_PLACE);
+//             HAL_Delay(50);
+//             MCRSBPtr->RunTaskTime(MoveDirection::Forward,100.0f);//x0y100
+//             robot.state = RobotState::Qr;
+//             break;
+//         case
+// }
+//
+// void QrEvent(){
+//         switch (robot.step) {
+//             case ActionState::Enter:
+//                 robot.step = ActionState::Go;
+//                 break;
+//             case ActionState::Go:
+//
+//         }
+// }
 
 void print(const char*format,...){
     char buf[512];
@@ -148,23 +188,25 @@ void print(const char*format,...){
     while(HAL_UART_GetState(&huart2)==HAL_UART_STATE_BUSY_TX);
 }
 
-void Motor_Move_Steps(uint16_t steps)
+void Elevation_Move(double distance,Dir dir)
 {
-    step_elevation.SetCompare(1000);
-    // 1. 先停止之前的任何输出
-    step_elevation.Stop();
+    if (dir == Up) {
+        dir_elevation.Write(GPIO_PIN_RESET);//UP
+    }
+    else if (dir == Down) {
+        dir_elevation.Write(GPIO_PIN_SET);//Down
+    }
 
-    // 2. 重置计数器，确保从0开始
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    HAL_TIM_PWM_Stop_IT(&htim2, TIM_CHANNEL_1);
 
-    // 3. 清空更新标志，防止残留中断
-    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
+    uint32_t steps =  distance / 14.3 * 3200;
 
-    // 4. 设置目标脉冲数
+    PULSE_COUNT  = 0;
     PULSE_TARGET = steps;
-    PULSE_COUNT = 0;
-    MOTOR_STOPPED = 0;
+    PULSE_COMPLETED = false;
 
-    // 5. 启动PWM输出（使能计数器和输出）
-    step_elevation.Start();
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_CC1);
+
+    HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
 }
