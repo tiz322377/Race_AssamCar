@@ -27,32 +27,35 @@ enum Dir : uint8_t
 enum class RobotState : uint8_t {
     Zero,
 
-    // Qr,
-    GoQr,
-    WaitQr,
-    ParseQr,
+    Qr,
 
-    GoRaw,
-    GrabRaw,
+    Raw1,
+    Raw2,
 
-    GoRough,
-    PlaceRough,
-    ReloadRough,
+    Rough1,
+    Rough2,
 
-    GoBuffer,
-    PlaceBuffer,
+    Replace1,
+    Replace2,
 
-    ReturnStart,
-    Finished,
-    Fault
+    Buffer1,
+    Buffer2,
+
+    Finish,
 };
 
 enum class ActionState : uint8_t{
-    Enter,
+    Start,
 
     Go,
     Wait,
     Parse,
+
+    First,
+    Second,
+    Thrid,
+
+    Finish,
 };
 
 struct Mission {
@@ -65,7 +68,7 @@ struct Mission {
 
 struct RobotContext {
     RobotState state = RobotState::Zero;
-    ActionState step = ActionState::Enter;
+    ActionState step = ActionState::Start;
     Mission mission{};
 
     uint8_t batch = 0;   // 0：第一批，1：第二批
@@ -78,6 +81,16 @@ struct RobotContext {
 
 static RobotContext robot;
 
+void RobotEvent();
+void QrEvent(uint8_t dir);
+void Row1Event();
+void Rough1Event();
+void Replace1Event();
+void Buffer1Event();
+void Row2Event();
+void Rough2Event();
+void Replace2Event();
+void Buffer2Event();
 void print(const char*format,...);
 void Elevation_Move(double distance,Dir dir);
 
