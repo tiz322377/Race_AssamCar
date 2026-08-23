@@ -51,9 +51,13 @@ enum class ActionState : uint8_t{
     Wait,
     Parse,
 
+    GoFirst,
+    GoSecond,
+    GoThird,
+
     First,
     Second,
-    Thrid,
+    Third,
 
     Finish,
 };
