@@ -189,10 +189,10 @@ void QrEvent(uint8_t dir){
                 if (dir == 1) {
                     MCRSBPtr->RunTaskTime(MoveDirection::Left,995.0f);//x1100y200
                     HAL_Delay(50);
-                    MCRSBPtr->RunTaskTime(MoveDirection::Left,100.0f);//x1200y200
                     gm65.ReceiveDMA((uint8_t *)scanner_message,15);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Left,100.0f);//x1200y200
                     while(scanner_message[14] == 0){};
-                    HAL_Delay(20);
+                    HAL_Delay(50);
                     sscanf(scanner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",
                         mission_data+0,mission_data+1,mission_data+2,mission_data+3,mission_data+4,mission_data+5,
                         mission_data+6,mission_data+7,mission_data+8,mission_data+9,mission_data+10,mission_data+11);
@@ -203,9 +203,10 @@ void QrEvent(uint8_t dir){
                 else if (dir == 2) {
                     MCRSBPtr->RunTaskTime(MoveDirection::Right,895.0f);//x1300y200
                     HAL_Delay(50);
-                    MCRSBPtr->RunTaskTime(MoveDirection::Right,100.0f);//x1200y200
                     gm65.ReceiveDMA((uint8_t *)scanner_message,15);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Right,100.0f);//x1200y20
                     while(scanner_message[14] == 0){};
+                    HAL_Delay(50);
                     sscanf(scanner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_data+0,mission_data+1,
                             mission_data+2,mission_data+3,mission_data+4,mission_data+5,mission_data+6,mission_data+7,mission_data+8,
                             mission_data+9,mission_data+10,mission_data+11);
@@ -269,6 +270,20 @@ void Row1Event(){
                 };
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
+                if (camera_data[1] <= 0) {
+                    camera_data[1] = std::abs(camera_data[1]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / 3.4);
+                }
+                else if (camera_data[1] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / 3.4);
+                }
+                if (camera_data[2] <= 0) {
+                    camera_data[2] = std::abs(camera_data[2]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / 4.8);
+                }
+                else if (camera_data[2] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / 4.8);
+                }
                 if (camera_data[0] == robot.mission.batchColor[0][0]) {
                     Elevation_Move(21.45,Down);
                     while (PULSE_COMPLETED != true){};
@@ -303,6 +318,20 @@ void Row1Event(){
                 };
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
+                if (camera_data[1] <= 0) {
+                    camera_data[1] = std::abs(camera_data[1]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / 3.4);
+                }
+                else if (camera_data[1] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / 3.4);
+                }
+                if (camera_data[2] <= 0) {
+                    camera_data[2] = std::abs(camera_data[2]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / 4.8);
+                }
+                else if (camera_data[2] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / 4.8);
+                }
                 if (camera_data[0] == robot.mission.batchColor[0][1]) {
                     Elevation_Move(21.45,Down);
                     while (PULSE_COMPLETED != true){};
@@ -337,6 +366,20 @@ void Row1Event(){
                 };
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
+                if (camera_data[1] <= 0) {
+                    camera_data[1] = std::abs(camera_data[1]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / 3.4);
+                }
+                else if (camera_data[1] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / 3.4);
+                }
+                if (camera_data[2] <= 0) {
+                    camera_data[2] = std::abs(camera_data[2]);
+                    MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / 4.8);
+                }
+                else if (camera_data[2] >= 0) {
+                    MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / 4.8);
+                }
                 if (camera_data[0] == robot.mission.batchColor[0][2]) {
                     Elevation_Move(21.45,Down);
                     while (PULSE_COMPLETED != true){};
@@ -1219,7 +1262,7 @@ void Row2Event(){
             };
             HAL_Delay(20);
             sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-            if (camera_data[0] == robot.mission.batchColor[0][1]) {
+            if (camera_data[0] == robot.mission.batchColor[1][1]) {
                 Elevation_Move(21.45,Down);
                 while (PULSE_COMPLETED != true){};
                 HAL_Delay(100);
@@ -1253,7 +1296,7 @@ void Row2Event(){
             };
             HAL_Delay(20);
             sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-            if (camera_data[0] == robot.mission.batchColor[0][2]) {
+            if (camera_data[0] == robot.mission.batchColor[1][2]) {
                 Elevation_Move(21.45,Down);
                 while (PULSE_COMPLETED != true){};
                 HAL_Delay(100);
@@ -1562,7 +1605,7 @@ void Replace2Event(){
             plate.SetCompare(PLATE_MEMORY[0]);
             HAL_Delay(20);
             int8_t temp;
-            temp = robot.mission.roughSlot[0][0] - Ring_Rough;
+            temp = robot.mission.roughSlot[1][0] - Ring_Rough;
             if (temp == -2) {
                 MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
                 Ring_Rough = Ring_Rough + temp;
@@ -1633,7 +1676,7 @@ void Replace2Event(){
         case ActionState::GoSecond:
             plate.SetCompare(PLATE_MEMORY[1]);
             HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][1] - Ring_Rough;
+            temp = robot.mission.roughSlot[1][1] - Ring_Rough;
             if (temp == -2) {
                 MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
                 Ring_Rough = Ring_Rough + temp;
@@ -1704,7 +1747,7 @@ void Replace2Event(){
         case ActionState::GoThird:
             plate.SetCompare(PLATE_MEMORY[2]);
             HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][2] - Ring_Rough;
+            temp = robot.mission.roughSlot[1][2] - Ring_Rough;
             if (temp == -2) {
                 MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
                 Ring_Rough = Ring_Rough + temp;
