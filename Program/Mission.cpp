@@ -77,7 +77,7 @@ void scanMission(
     printHmiText(_hardware, scannerMessage.data());
 
     if (_direction == QrDirection::Left) {
-        move(_chassis, MoveDirection::Right, 975.0);
+        move(_chassis, MoveDirection::Right, 985.0);
     } else {
         move(_chassis, MoveDirection::Right, 820.0);
     }

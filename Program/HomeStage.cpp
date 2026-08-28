@@ -13,8 +13,8 @@ void runHomeStage(
     _hardware.gimbal.SetCompare(gimbalPlaceCompare);
     HAL_Delay(50);
     move(_chassis, MoveDirection::Backward, 970.0);
-    move(_chassis, MoveDirection::Left, 1850.0);
-    move(_chassis, MoveDirection::Backward, 115.0);
+    move(_chassis, MoveDirection::Left, 1970.0);
+    move(_chassis, MoveDirection::Backward, 45.0);
 }
 
 } // namespace Program

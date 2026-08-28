@@ -56,7 +56,7 @@ void printHmiValue(RobotHardware &_hardware, const uint8_t _value)
 {
     printHmi(
         _hardware,
-        "j0.val=%u \xff\xff\xff",
+        "j0.val=%u\xff\xff\xff",
         static_cast<unsigned int>(_value));
 }
 

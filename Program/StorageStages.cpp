@@ -206,15 +206,15 @@ void runBufferStage(
 
     if (_batch == Batch::First) {
         printHmiValue(_hardware, 37);
-        move(_chassis, MoveDirection::Backward, 920.0);
-        move(_chassis, MoveDirection::Left, 880.0);
+        move(_chassis, MoveDirection::Backward, 870.0);
+        move(_chassis, MoveDirection::Left, 910.0);
     } else {
         printHmiValue(_hardware, 87);
         move(_chassis, MoveDirection::Backward, 830.0);
         move(_chassis, MoveDirection::Left, 1015.0);
     }
 
-    move(_chassis, MoveDirection::Rotate, 88.0);
+    move(_chassis, MoveDirection::Rotate, 87.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
         _hardware.plate.SetCompare(plateCompare[itemIndex]);
