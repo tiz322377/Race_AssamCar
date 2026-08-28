@@ -1,7 +1,7 @@
-# 方式1：使用 GLOB_RECURSE（不推荐，但简单）
-file(GLOB_RECURSE USER_SOURCES
-        "User/*.cpp"
-        "Program/*.cpp"
+# 递归收集人工维护的 C++ 源文件；新增文件时自动触发 CMake 重配置。
+file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/../User/*.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../Program/*.cpp"
 )
 
 add_library(UserLib)
