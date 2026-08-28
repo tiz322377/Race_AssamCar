@@ -14,8 +14,6 @@
 #include <type_traits>
 
 namespace Platform::Chassis {
-    extern MecanumChassis<RS485Bus> * MCRSBPtr;
-
     template<>
     class MecanumChassis<RS485Bus> {
     public:
@@ -24,10 +22,26 @@ namespace Platform::Chassis {
 
         using CPin = Modules::RS485::CPin;
 
-        static void Create(const uint8_t *_addrs, const Peripheral::Uart<Peripheral::DMA> *_bus,CPin _pin, const uint8_t _cent,
-                           const bool *_dirs, const bool _is18Angle, const double _radius,const double _motorDsitance) {
-            static MecanumChassis instance(_bus,_pin, _addrs, _dirs, _cent, _is18Angle, _radius,_motorDsitance);
-            MCRSBPtr = &instance;
+        static MecanumChassis &Create(
+            const uint8_t *_addrs,
+            const Peripheral::Uart<Peripheral::DMA> *_bus,
+            CPin _pin,
+            const uint8_t _cent,
+            const bool *_dirs,
+            const bool _is18Angle,
+            const double _radius,
+            const double _motorDistance)
+        {
+            static MecanumChassis instance(
+                _bus,
+                _pin,
+                _addrs,
+                _dirs,
+                _cent,
+                _is18Angle,
+                _radius,
+                _motorDistance);
+            return instance;
         }
 
 

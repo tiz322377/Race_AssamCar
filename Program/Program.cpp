@@ -1,2512 +1,740 @@
-//
-// Created by Administrator on 25-7-3.
-//
-
 #include "Program.hpp"
 
-
-#include "Config/Config.hpp"
+#include "Peripheral/GPIO.hpp"
 #include "Peripheral/Mode.hpp"
 #include "Peripheral/TIM.hpp"
-#include "Peripheral/I2C.hpp"
+#include "Peripheral/Uart.hpp"
 #include "Platform/Chassis/ChassisU.hpp"
 #include "Platform/Chassis/Mecanum/RS485Bus/RS485Bus.hpp"
 
+#include "main.h"
 #include "tim.h"
-#include "i2c.h"
 #include "usart.h"
 
+#include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cstdint>
-#include <cstdarg>
 
-using namespace Peripheral;
-using namespace Platform::Chassis;
+namespace {
 
-const auto gm65 = Uart<DMA>(&huart1);//9600
-const auto HMI = Uart<Normal>(&huart5);
-const auto camera = Uart<DMA>(&huart3);
-const auto bus = Uart<DMA>(&huart4);
-const auto gimbal = PwmChannel<Normal>(&htim1,TIM_CHANNEL_1);
-const auto plate = PwmChannel<Normal>(&htim1,TIM_CHANNEL_2);
-const auto arm = PwmChannel<Normal>(&htim1,TIM_CHANNEL_3);
-const auto JY901P = I2C<Master,I2CWorkMode::DMA>(&hi2c1);
-const auto en_elevation = GPIOPin<Output>(GPIOA,GPIO_PIN_6);
-const auto step_elevation = PwmChannel<Normal>(&htim2,TIM_CHANNEL_1);
-const auto dir_elevation = GPIOPin<Output>(GPIOA,GPIO_PIN_4);
+using DmaUart = Peripheral::Uart<Peripheral::DMA>;
+using NormalUart = Peripheral::Uart<Peripheral::Normal>;
+using NormalPwm = Peripheral::PwmChannel<Peripheral::Normal>;
+using OutputPin = Peripheral::GPIOPin<Peripheral::Output>;
+using MoveDirection = Platform::Chassis::MoveDirection;
+using Rs485Chassis = Platform::Chassis::MecanumChassis<Platform::Chassis::RS485Bus>;
 
-char HMI_txtcontrol[7] = {"t1.txt"};
-char HMI_valcontrol[7] = {"j0.val"};
-char scanner_message[16] = {0};
-char camera_message[15] = {0};
-int mission_data[12] = {0};
-int camera_data[3] = {7};
+constexpr uint8_t batchCount = 2;
+constexpr uint8_t itemCount = 3;
+constexpr uint8_t roughCenterSlot = 2;
 
-volatile uint32_t PULSE_TARGET = 0;
-volatile uint32_t PULSE_COUNT = 0;
-volatile bool PULSE_COMPLETED = false;
-constexpr auto GIMBAL_GRAB = 72;
-constexpr auto GIMBAL_PLACE = 180;
-constexpr auto ARM_GRAB = 260;
-constexpr auto ARM_PLACE = 220;
-uint8_t PLATE_MEMORY[3] = {75,160,250};
-float Xlow_Rate = 3.2;
-float Ylow_Rate = 1.6;
-float Xhigh_Rate = 6.4;
-float Yhigh_Rate = 3.2;
-int8_t Ring_Rough = 2;
+constexpr uint32_t gimbalGrabCompare = 72;
+constexpr uint32_t gimbalPlaceCompare = 180;
+constexpr uint32_t armGrabCompare = 260;
+constexpr uint32_t armPlaceCompare = 220;
 
-void Init()
+constexpr std::array<uint32_t, itemCount> plateCompare{75, 160, 250};
+
+constexpr double lowXRate = 3.2;
+constexpr double lowYRate = 1.6;
+constexpr double highXRate = 6.4;
+constexpr double highYRate = 3.2;
+
+enum class Batch : uint8_t {
+    First,
+    Second,
+};
+
+enum class QrDirection : uint8_t {
+    Left,
+    Right,
+};
+
+enum class ElevationDirection : uint8_t {
+    Up,
+    Down,
+};
+
+struct Material {
+    uint8_t color{};
+    uint8_t roughSlot{};
+};
+
+using MaterialOrder = std::array<Material, itemCount>;
+
+struct Mission {
+    std::array<MaterialOrder, batchCount> batches{};
+};
+
+struct AlignmentProfile {
+    double xRate;
+    double yRate;
+    uint32_t firstReceiveDelayBeforeMs;
+    uint32_t firstReceiveDelayAfterMs;
+};
+
+struct RobotHardware {
+    DmaUart scanner{&huart1};
+    NormalUart hmi{&huart5};
+    DmaUart camera{&huart3};
+    DmaUart bus{&huart4};
+
+    NormalPwm gimbal{&htim1, TIM_CHANNEL_1};
+    NormalPwm plate{&htim1, TIM_CHANNEL_2};
+    NormalPwm arm{&htim1, TIM_CHANNEL_3};
+
+    OutputPin elevationEnable{GPIOA, GPIO_PIN_6};
+    NormalPwm elevationPwm{&htim2, TIM_CHANNEL_1};
+    OutputPin elevationDirection{GPIOA, GPIO_PIN_4};
+};
+
+using CameraBuffer = std::array<char, 15>;
+using CameraData = std::array<int, 3>;
+
+uint8_t toIndex(const Batch _batch)
 {
-    constexpr auto radius = 37.5;
-    const auto distance = std::sqrt(105 * 105 + 105 * 105);
-    constexpr uint8_t address[4] = {1,2,3,4};
-    constexpr bool dirs[4] = {false,false,false,false};
-    const GPIOPin<Output> flowControlPin(GPIOF,GPIO_PIN_8);
-    robot.state = RobotState::Zero;
-
-    gimbal.Start();
-    plate.Start();
-    arm.Start();
-
-    en_elevation.Write(GPIO_PIN_SET);
-    step_elevation.SetCompare(1000);
-
-    MecanumChassis<RS485Bus>::Create(
-        address, &bus, flowControlPin, 16, dirs, true, radius, distance);
-
-    HAL_Delay(500);
+    return static_cast<uint8_t>(_batch);
 }
 
-extern "C" [[noreturn]] void Main()
+void move(
+    Rs485Chassis &_chassis,
+    const MoveDirection _direction,
+    const double _distanceMm)
 {
-    //Rotate顺时针
-    Init();
-
-    // robot.mission.batchColor[0][0] = 4;
-    // robot.mission.batchColor[0][1] = 5;
-    // robot.mission.batchColor[0][2] = 6;
-    // robot.state = RobotState::Raw2;
-    // robot.step = ActionState::GoFirst;
-
-    for (;;) {
-        RobotEvent();
-    }
+    _chassis.RunTaskTime(_direction, _distanceMm);
 }
 
-void RobotEvent(){
-    switch (robot.state) {
-        case RobotState::Zero:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(50);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(50);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(50);
-            robot.state = RobotState::Qr;
-            break;
+void printHmi(RobotHardware &_hardware, const char *_format, ...)
+{
+    std::array<char, 512> buffer{};
 
-        case RobotState::Qr:
-            QrEvent(1);
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Raw1;
-            }
-            break;
-
-        case RobotState::Raw1:
-            Row1Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Rough1;
-            }
-            break;
-
-        case RobotState::Rough1:
-            Rough1Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Replace1;
-            }
-            break;
-
-        case RobotState::Replace1:
-            Replace1Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Buffer1;
-            }
-            break;
-
-        case RobotState::Buffer1:
-            Buffer1Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Raw2;
-            }
-            break;
-
-        case RobotState::Raw2:
-            Row2Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Rough2;
-            }
-            break;
-
-        case RobotState::Rough2:
-            Rough2Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Replace2;
-            }
-            break;
-
-        case RobotState::Replace2:
-            Replace2Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Buffer2;
-            }
-            break;
-
-        case RobotState::Buffer2:
-            Buffer2Event();
-            if (robot.step == ActionState::Finish) {
-                robot.step = ActionState::Start;
-                robot.state = RobotState::Home;
-            }
-            break;
-
-        case RobotState::Home:
-            HomeEvent();
-            if (robot.step == ActionState::Finish) {
-                robot.state = RobotState::Finish;
-            }
-
-        default:
-            break;
-    }
-}
-//dir == 1 or 2
-void QrEvent(uint8_t dir){
-        switch (robot.step) {
-            case ActionState::Start:
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,200.0f);//x0y200
-                robot.step = ActionState::Go;
-                break;
-
-            case ActionState::Go:
-                if (dir == 1) {
-                    MCRSBPtr->RunTaskTime(MoveDirection::Left,995.0f);//x1100y200
-                    HAL_Delay(50);
-                    MCRSBPtr->RunTaskTime(MoveDirection::Left,100.0f);//x1200y200
-                    gm65.ReceiveDMA((uint8_t *)scanner_message,15);
-                    while (scanner_message[14] == 0){};
-                    HAL_Delay(50);
-                    sscanf(scanner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",
-                        mission_data+0,mission_data+1,mission_data+2,mission_data+3,mission_data+4,mission_data+5,
-                        mission_data+6,mission_data+7,mission_data+8,mission_data+9,mission_data+10,mission_data+11);
-                    HAL_Delay(50);
-                    robot.step = ActionState::Wait;
-                    break;
-                }
-                else if (dir == 2) {
-                    MCRSBPtr->RunTaskTime(MoveDirection::Right,895.0f);//x1300y200
-                    HAL_Delay(50);
-                    MCRSBPtr->RunTaskTime(MoveDirection::Right,100.0f);//x1200y20
-                    gm65.ReceiveDMA((uint8_t *)scanner_message,15);
-                    while (scanner_message[14] == 0){};
-                    HAL_Delay(50);
-                    sscanf(scanner_message,"%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",mission_data+0,mission_data+1,
-                            mission_data+2,mission_data+3,mission_data+4,mission_data+5,mission_data+6,mission_data+7,mission_data+8,
-                            mission_data+9,mission_data+10,mission_data+11);
-                    HAL_Delay(50);
-                    robot.step = ActionState::Wait;
-                    break;
-                }
-
-            case ActionState::Wait:
-                HAL_Delay(50);
-                for (uint8_t i = 0; i < 3; i++) {
-                    robot.mission.batchColor[0][i] = mission_data[i];
-                    robot.mission.roughSlot[0][i] = mission_data[i+3];
-                    robot.mission.batchColor[1][i] = mission_data[i+6];
-                    robot.mission.roughSlot[1][i] = mission_data[i+9];
-                }
-                robot.step = ActionState::Parse;
-                break;
-
-            case ActionState::Parse:
-                print("%s=\"%s\"\xff\xff\xff",HMI_txtcontrol,scanner_message);
-                if (dir == 1) {
-                    MCRSBPtr->RunTaskTime(MoveDirection::Right,990.0f);//x250y200
-                }
-                else if (dir == 2) {
-                    MCRSBPtr->RunTaskTime(MoveDirection::Right,820.0f);//x250y200
-                }
-                robot.step = ActionState::Finish;
-                break;
-
-            default:
-                robot.step = ActionState::Finish;
-                break;
-        }
-}
-
-void Row1Event(){
-        switch (robot.step) {
-            case ActionState::Start://x250y200
-                gimbal.SetCompare(GIMBAL_GRAB);
-                HAL_Delay(50);
-                robot.step = ActionState::Go;
-                break;
-
-            case ActionState::Go:
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,890.0f);//x250y1090
-                robot.step = ActionState::GoFirst;
-                break;
-
-            case ActionState::GoFirst:
-                HAL_Delay(100);
-                plate.SetCompare(PLATE_MEMORY[0]);
-                HAL_Delay(100);
-                robot.step = ActionState::First;
-                break;
-
-            case ActionState::First:
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-                if (camera_message[0] == 0 || camera_data[0] > 6) {
-                    camera.ReceiveDMA((uint8_t *)camera_message,14);
-                };
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-                if (camera_data[0] == robot.mission.batchColor[0][0]) {
-                    Elevation_Move(21.45,Down);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(100);
-                    arm.SetCompare(ARM_GRAB);
-                    HAL_Delay(1000);
-                    Elevation_Move(14.3,Up);
-                    while (PULSE_COMPLETED != true){};
-                    gimbal.SetCompare(GIMBAL_PLACE);
-                    HAL_Delay(2000);
-                    arm.SetCompare(ARM_PLACE);
-                    Elevation_Move(7.15,Up);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(100);
-                    robot.step = ActionState::GoSecond;
-                }
-                break;
-
-            case ActionState::GoSecond:
-                camera_message[0] = 0;
-                gimbal.SetCompare(GIMBAL_GRAB);
-                HAL_Delay(20);
-                plate.SetCompare(PLATE_MEMORY[1]);
-                HAL_Delay(20);
-                robot.step = ActionState::Second;
-                break;
-
-            case ActionState::Second:
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-                if (camera_message[0] == 0 || camera_data[0] > 6) {
-                    camera.ReceiveDMA((uint8_t *)camera_message,14);
-                };
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-                if (camera_data[0] == robot.mission.batchColor[0][1]) {
-                    Elevation_Move(21.45,Down);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(100);
-                    arm.SetCompare(ARM_GRAB);
-                    HAL_Delay(1000);
-                    Elevation_Move(14.3,Up);
-                    while (PULSE_COMPLETED != true){};
-                    gimbal.SetCompare(GIMBAL_PLACE);
-                    HAL_Delay(2000);
-                    arm.SetCompare(ARM_PLACE);
-                    Elevation_Move(7.15,Up);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(100);
-                    robot.step = ActionState::GoThird;
-                }
-                break;
-
-            case ActionState::GoThird:
-                camera_message[0] = 0;
-                gimbal.SetCompare(GIMBAL_GRAB);
-                HAL_Delay(20);
-                plate.SetCompare(PLATE_MEMORY[2]);
-                HAL_Delay(20);
-                robot.step = ActionState::Third;
-                break;
-
-            case ActionState::Third:
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-                while (camera_message[0] == 0 || camera_data[0] > 6) {
-                    camera.ReceiveDMA((uint8_t *)camera_message,14);
-                };
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-                if (camera_data[0] == robot.mission.batchColor[0][2]) {
-                    Elevation_Move(21.45,Down);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(100);
-                    arm.SetCompare(ARM_GRAB);
-                    HAL_Delay(1000);
-                    Elevation_Move(14.3,Up);
-                    while (PULSE_COMPLETED != true){};
-                    gimbal.SetCompare(GIMBAL_PLACE);
-                    HAL_Delay(2000);
-                    arm.SetCompare(ARM_PLACE);
-                    Elevation_Move(7.15,Up);
-                    while (PULSE_COMPLETED != true){};
-                    HAL_Delay(50);
-                    constexpr char message[5] = {"OK!\n"};
-                    camera.Send(message,sizeof(message),100);
-                    HAL_Delay(50);
-                    robot.step = ActionState::Finish;
-                }
-                break;
-
-            default:
-                robot.step = ActionState::Finish;
-                break;
-        }
-}
-
-void Rough1Event(){
-    switch (robot.step) {
-        case ActionState::Start://x250y1090
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            int8_t temp;
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,12);
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,1835.0f);//x2085y1090
-            MCRSBPtr->RunTaskTime(MoveDirection::Rotate,175.0f);//x2085y1090旋转
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-                }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,160.0f); // x2085y940
-                Ring_Rough = Ring_Rough + temp;
-                }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,160.0f); // x2085y1240
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoSecond;
-            break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,160.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,160.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,160.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,160.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Third:
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::Wait;
-            break;
-
-        case ActionState::Wait:
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,160.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,160.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,320.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void Replace1Event(){
-    switch (robot.step) {
-        case ActionState::Start://x2085y1070
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,25);
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            int8_t temp;
-            temp = robot.mission.roughSlot[0][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::GoSecond;
-            break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-
-        case ActionState::Third:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::Wait;
-            break;
-
-        case ActionState::Wait:
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void Buffer1Event(){
-    switch (robot.step) {
-        case ActionState::Start://x2085y1070
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,37);
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,920.0f);//x2085y1990
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,880.0f);//x1220y1990
-            int8_t temp;
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Rotate,88.0f);//x1220y1990
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoSecond;
-            break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[0][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Third: {
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            constexpr char message[5] = {"KO!\n"};
-            camera.Send(message,sizeof(message),100);
-            HAL_Delay(50);
-            robot.step = ActionState::Wait;
-            break;
-        }
-
-        case ActionState::Wait:
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void Row2Event(){
-    switch (robot.step) {
-        case ActionState::Start://x1220y1990
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,50);
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,970.0f);//x250y1990
-            MCRSBPtr->RunTaskTime(MoveDirection::Rotate,88.0f);//x250y1900旋转
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,915.0f);//x250y1075
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(100);
-            robot.step = ActionState::First;
-            break;
-
-        case ActionState::First:
-            camera.ReceiveDMA((uint8_t *)camera_message,14);
-            if (camera_message[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-            };
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-            if (camera_data[0] == robot.mission.batchColor[1][0]) {
-                Elevation_Move(21.45,Down);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(100);
-                arm.SetCompare(ARM_GRAB);
-                HAL_Delay(1000);
-                Elevation_Move(14.3,Up);
-                while (PULSE_COMPLETED != true){};
-                gimbal.SetCompare(GIMBAL_PLACE);
-                HAL_Delay(2000);
-                arm.SetCompare(ARM_PLACE);
-                Elevation_Move(7.15,Up);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(100);
-                robot.step = ActionState::GoSecond;
-            }
-            break;
-
-        case ActionState::GoSecond:
-            camera_message[0] = 0;
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(50);
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(100);
-            robot.step = ActionState::Second;
-            break;
-
-        case ActionState::Second:
-            camera.ReceiveDMA((uint8_t *)camera_message,14);
-            if (camera_message[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-            };
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-            if (camera_data[0] == robot.mission.batchColor[1][1]) {
-                Elevation_Move(21.45,Down);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(100);
-                arm.SetCompare(ARM_GRAB);
-                HAL_Delay(1000);
-                Elevation_Move(14.3,Up);
-                while (PULSE_COMPLETED != true){};
-                gimbal.SetCompare(GIMBAL_PLACE);
-                HAL_Delay(2000);
-                arm.SetCompare(ARM_PLACE);
-                Elevation_Move(7.15,Up);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(100);
-                robot.step = ActionState::GoThird;
-            }
-            break;
-
-        case ActionState::GoThird:
-            camera_message[0] = 0;
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(50);
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(100);
-            robot.step = ActionState::Third;
-            break;
-
-        case ActionState::Third:
-            camera.ReceiveDMA((uint8_t *)camera_message,14);
-            while (camera_message[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
-            };
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d,%d",camera_data+0,camera_data+1,camera_data+2);
-            if (camera_data[0] == robot.mission.batchColor[1][2]) {
-                Elevation_Move(21.45,Down);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(100);
-                arm.SetCompare(ARM_GRAB);
-                HAL_Delay(1000);
-                Elevation_Move(14.3,Up);
-                while (PULSE_COMPLETED != true){};
-                gimbal.SetCompare(GIMBAL_PLACE);
-                HAL_Delay(2000);
-                arm.SetCompare(ARM_PLACE);
-                Elevation_Move(7.15,Up);
-                while (PULSE_COMPLETED != true){};
-                HAL_Delay(50);
-                constexpr char message[5] = {"OK!\n"};
-                camera.Send(message,sizeof(message),100);
-                robot.step = ActionState::Finish;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-        }
-}
-
-void Rough2Event(){
-   switch (robot.step) {
-        case ActionState::Start://x250y1090
-           print("%s=%d \xff\xff\xff",HMI_valcontrol,62);
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            int8_t temp;
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,11);
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,1835.0f);//x2085y1090
-            MCRSBPtr->RunTaskTime(MoveDirection::Rotate,175.0f);//x2085y1090旋转
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-                }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y940
-                Ring_Rough = Ring_Rough + temp;
-                }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1240
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-           HAL_Delay(20);
-           camera.ReceiveDMA((uint8_t *)camera_message,10);
-           HAL_Delay(20);
-           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-           Elevation_Move(42.9,Up);
-           while (PULSE_COMPLETED != true){};
-           HAL_Delay(2000);
-           gimbal.SetCompare(GIMBAL_PLACE);
-           HAL_Delay(1500);
-           Elevation_Move(14.3,Down);
-           while (PULSE_COMPLETED != true){};
-           arm.SetCompare(ARM_GRAB);
-           HAL_Delay(1500);
-           Elevation_Move(14.3,Up);
-           while (PULSE_COMPLETED != true){};
-           gimbal.SetCompare(GIMBAL_GRAB);
-           HAL_Delay(1500);
-           Elevation_Move(42.9,Down);
-           while (PULSE_COMPLETED != true){};
-           HAL_Delay(20);
-           arm.SetCompare(ARM_PLACE);
-           HAL_Delay(500);
-           Elevation_Move(42.9,Up);
-           while (PULSE_COMPLETED != true){};
-           robot.step = ActionState::GoSecond;
-           break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-           HAL_Delay(20);
-           camera.ReceiveDMA((uint8_t *)camera_message,10);
-           HAL_Delay(20);
-           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Third:
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-           HAL_Delay(20);
-           camera.ReceiveDMA((uint8_t *)camera_message,10);
-           HAL_Delay(20);
-           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-           if (camera_data[0] <= 0) {
-               camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-           }
-           else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-           }
-           HAL_Delay(20);
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-           }
-           Elevation_Move(42.9,Up);
-           while (PULSE_COMPLETED != true){};
-           HAL_Delay(2000);
-           gimbal.SetCompare(GIMBAL_PLACE);
-           HAL_Delay(1500);
-           Elevation_Move(14.3,Down);
-           while (PULSE_COMPLETED != true){};
-           arm.SetCompare(ARM_GRAB);
-           HAL_Delay(1500);
-           Elevation_Move(14.3,Up);
-           while (PULSE_COMPLETED != true){};
-           gimbal.SetCompare(GIMBAL_GRAB);
-           HAL_Delay(1500);
-           Elevation_Move(42.9,Down);
-           while (PULSE_COMPLETED != true){};
-           HAL_Delay(20);
-           arm.SetCompare(ARM_PLACE);
-           HAL_Delay(500);
-           Elevation_Move(42.9,Up);
-           while (PULSE_COMPLETED != true){};
-           HAL_Delay(50);
-           robot.step = ActionState::Wait;
-           break;
-
-        case ActionState::Wait:
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void Replace2Event(){
-    switch (robot.step) {
-        case ActionState::Start:////x2085y1070
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,75);
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            int8_t temp;
-            temp = robot.mission.roughSlot[1][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::GoSecond;
-            break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-
-        case ActionState::Third:
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(100);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
-            }
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1000);
-            Elevation_Move(7.15,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            Elevation_Move(7.15,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(20);
-            robot.step = ActionState::Wait;
-            break;
-
-        case ActionState::Wait:
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void Buffer2Event(){
-    switch (robot.step) {
-        case ActionState::Start://x2085y1070
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,87);
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,830.0f);//x2085y1900
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,1015.0f);//x1070y1900
-            int8_t temp;
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Rotate,88.0f);//x1070y1900
-            robot.step = ActionState::GoFirst;
-            break;
-
-        case ActionState::GoFirst:
-            plate.SetCompare(PLATE_MEMORY[0]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][0] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y940
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::First;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1240
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::First:
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoSecond;
-            break;
-
-        case ActionState::GoSecond:
-            plate.SetCompare(PLATE_MEMORY[1]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][1] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Second;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Second:
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoThird;
-            break;
-
-        case ActionState::GoThird:
-            plate.SetCompare(PLATE_MEMORY[2]);
-            HAL_Delay(20);
-            temp = robot.mission.roughSlot[1][2] - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Third;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        case ActionState::Third:
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            camera_data[0] = 0;
-            camera_data[1] = 0;
-            while (camera_data[0] == 0) {
-                HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,10);
-                HAL_Delay(20);
-                sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            };
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            HAL_Delay(20);
-            camera.ReceiveDMA((uint8_t *)camera_message,10);
-            HAL_Delay(20);
-            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
-            if (camera_data[0] <= 0) {
-                camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
-            }
-            else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
-            }
-            HAL_Delay(20);
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
-            }
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(20.02,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(20.02,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::Wait;
-            break;
-
-        case ActionState::Wait:
-            print("%s=%d \xff\xff\xff",HMI_valcontrol,100);
-            temp = 2 - Ring_Rough;
-            if (temp == -2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == -1){
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,150.0f); // x2085y920
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 0) {
-                robot.step = ActionState::Finish;
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 1) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,150.0f); // x2085y1220
-                Ring_Rough = Ring_Rough + temp;
-            }
-            else if (temp == 2) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,300.0f);
-                Ring_Rough = Ring_Rough + temp;
-            }
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void HomeEvent(){
-    switch (robot.step) {
-        case ActionState::Start:
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(50);
-            robot.step = ActionState::Go;
-            break;
-
-        case ActionState::Go:
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,970.0f);//x250y1990
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,1850.0f);//x250y140
-            MCRSBPtr->RunTaskTime(MoveDirection::Backward,115.0f);//x135y140
-            robot.step = ActionState::Finish;
-            break;
-
-        default:
-            robot.step = ActionState::Finish;
-            break;
-    }
-}
-
-void print(const char*format,...){
-    char buf[512];
     va_list args;
-    va_start(args,format);
-    vsnprintf(buf,sizeof(buf),format,args);
+    va_start(args, _format);
+    std::vsnprintf(buffer.data(), buffer.size(), _format, args);
     va_end(args);
 
-    HMI.Send((uint8_t*)buf,strlen(buf) ,300);
+    _hardware.hmi.Send(
+        reinterpret_cast<uint8_t *>(buffer.data()),
+        static_cast<uint16_t>(std::strlen(buffer.data())),
+        300);
 
-    while(HAL_UART_GetState(&huart5)==HAL_UART_STATE_BUSY_TX);
+    while (HAL_UART_GetState(&huart5) == HAL_UART_STATE_BUSY_TX) {
+    }
 }
 
-void Elevation_Move(double dis,Dir dir){
-    if (dir == Up) {
-        dir_elevation.Write(GPIO_PIN_RESET);//UP
-    }
-    else if (dir == Down) {
-        dir_elevation.Write(GPIO_PIN_SET);//Down
-    }
+void printHmiValue(RobotHardware &_hardware, const uint8_t _value)
+{
+    printHmi(
+        _hardware,
+        "j0.val=%u \xff\xff\xff",
+        static_cast<unsigned int>(_value));
+}
 
+void printHmiText(RobotHardware &_hardware, const char *_text)
+{
+    printHmi(_hardware, "t1.txt=\"%s\"\xff\xff\xff", _text);
+}
+
+Rs485Chassis &init(RobotHardware &_hardware)
+{
+    constexpr double radiusMm = 37.5;
+    const double motorDistanceMm = std::sqrt(105.0 * 105.0 + 105.0 * 105.0);
+    constexpr std::array<uint8_t, 4> addresses{1, 2, 3, 4};
+    constexpr std::array<bool, 4> directions{false, false, false, false};
+    const OutputPin flowControlPin(GPIOF, GPIO_PIN_8);
+
+    _hardware.gimbal.Start();
+    _hardware.plate.Start();
+    _hardware.arm.Start();
+
+    _hardware.elevationEnable.Write(true);
+    _hardware.elevationPwm.SetCompare(1000);
+
+    Rs485Chassis &chassis = Rs485Chassis::Create(
+        addresses.data(),
+        &_hardware.bus,
+        flowControlPin,
+        16,
+        directions.data(),
+        true,
+        radiusMm,
+        motorDistanceMm);
+
+    HAL_Delay(500);
+    return chassis;
+}
+
+void resetMechanism(RobotHardware &_hardware)
+{
+    _hardware.plate.SetCompare(plateCompare[0]);
+    HAL_Delay(50);
+    _hardware.gimbal.SetCompare(gimbalPlaceCompare);
+    HAL_Delay(50);
+    _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(50);
+}
+
+void moveElevation(
+    RobotHardware &_hardware,
+    const double _distanceMm,
+    const ElevationDirection _direction)
+{
+    _hardware.elevationDirection.Write(_direction == ElevationDirection::Down);
     HAL_Delay(20);
 
     HAL_TIM_PWM_Stop_IT(&htim2, TIM_CHANNEL_1);
 
-    double steps =  dis / 14.3 * 200;
-
-    PULSE_COUNT  = 0;
-    PULSE_TARGET = static_cast<uint32_t>(steps);
-    PULSE_COMPLETED = false;
+    const double steps = _distanceMm / 14.3 * 200.0;
+    ElevationPulseCounterReset(static_cast<uint32_t>(steps));
 
     __HAL_TIM_SET_COUNTER(&htim2, 0);
     __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_CC1);
 
     HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
+
+    while (!ElevationPulseCounterIsCompleted()) {
+    }
+}
+
+void scanMission(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    Mission &_mission,
+    const QrDirection _direction)
+{
+    std::array<char, 16> scannerMessage{};
+    std::array<int, 12> missionData{};
+
+    move(_chassis, MoveDirection::Forward, 200.0);
+
+    if (_direction == QrDirection::Left) {
+        move(_chassis, MoveDirection::Left, 995.0);
+        HAL_Delay(50);
+        move(_chassis, MoveDirection::Left, 100.0);
+    } else {
+        move(_chassis, MoveDirection::Right, 895.0);
+        HAL_Delay(50);
+        move(_chassis, MoveDirection::Right, 100.0);
+    }
+
+    _hardware.scanner.ReceiveDMA(
+        reinterpret_cast<uint8_t *>(scannerMessage.data()), 15);
+
+    while (scannerMessage[14] == 0) {
+    }
+
+    HAL_Delay(50);
+
+    std::sscanf(
+        scannerMessage.data(),
+        "%1d%1d%1d+%1d%1d%1d+%1d%1d%1d+%1d%1d%1d",
+        &missionData[0],
+        &missionData[1],
+        &missionData[2],
+        &missionData[3],
+        &missionData[4],
+        &missionData[5],
+        &missionData[6],
+        &missionData[7],
+        &missionData[8],
+        &missionData[9],
+        &missionData[10],
+        &missionData[11]);
+
+    HAL_Delay(100);
+
+    for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+        _mission.batches[toIndex(Batch::First)][itemIndex].color =
+            static_cast<uint8_t>(missionData[itemIndex]);
+        _mission.batches[toIndex(Batch::First)][itemIndex].roughSlot =
+            static_cast<uint8_t>(missionData[itemIndex + 3]);
+        _mission.batches[toIndex(Batch::Second)][itemIndex].color =
+            static_cast<uint8_t>(missionData[itemIndex + 6]);
+        _mission.batches[toIndex(Batch::Second)][itemIndex].roughSlot =
+            static_cast<uint8_t>(missionData[itemIndex + 9]);
+    }
+
+    printHmiText(_hardware, scannerMessage.data());
+
+    if (_direction == QrDirection::Left) {
+        move(_chassis, MoveDirection::Right, 990.0);
+    } else {
+        move(_chassis, MoveDirection::Right, 820.0);
+    }
+}
+
+void receiveRawMaterial(
+    RobotHardware &_hardware,
+    CameraBuffer &_cameraBuffer,
+    CameraData &_cameraData,
+    const bool _waitForMessage,
+    const bool _checkColorRange)
+{
+    _hardware.camera.ReceiveDMA(
+        reinterpret_cast<uint8_t *>(_cameraBuffer.data()), 14);
+
+    if (_waitForMessage) {
+        while (
+            _cameraBuffer[0] == 0 ||
+            (_checkColorRange && _cameraData[0] > 6)) {
+            _hardware.camera.ReceiveDMA(
+                reinterpret_cast<uint8_t *>(_cameraBuffer.data()), 14);
+        }
+    } else if (
+        _cameraBuffer[0] == 0 ||
+        (_checkColorRange && _cameraData[0] > 6)) {
+        _hardware.camera.ReceiveDMA(
+            reinterpret_cast<uint8_t *>(_cameraBuffer.data()), 14);
+    }
+
+    HAL_Delay(20);
+    std::sscanf(
+        _cameraBuffer.data(),
+        "#%d,%d,%d",
+        &_cameraData[0],
+        &_cameraData[1],
+        &_cameraData[2]);
+}
+
+void pickRawMaterial(
+    RobotHardware &_hardware,
+    const bool _isLastItem,
+    const bool _delayAfterAcknowledgement)
+{
+    moveElevation(_hardware, 21.45, ElevationDirection::Down);
+    HAL_Delay(100);
+    _hardware.arm.SetCompare(armGrabCompare);
+    HAL_Delay(1000);
+    moveElevation(_hardware, 14.3, ElevationDirection::Up);
+    _hardware.gimbal.SetCompare(gimbalPlaceCompare);
+    HAL_Delay(2000);
+    _hardware.arm.SetCompare(armPlaceCompare);
+    moveElevation(_hardware, 7.15, ElevationDirection::Up);
+
+    if (!_isLastItem) {
+        HAL_Delay(100);
+        return;
+    }
+
+    HAL_Delay(50);
+    constexpr char message[] = "OK!\n";
+    _hardware.camera.Send(message, sizeof(message), 100);
+
+    if (_delayAfterAcknowledgement) {
+        HAL_Delay(50);
+    }
+}
+
+void runRawStage(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const Mission &_mission,
+    const Batch _batch)
+{
+    const uint8_t batchIndex = toIndex(_batch);
+    CameraBuffer cameraBuffer{};
+    CameraData cameraData{7, 0, 0};
+
+    if (_batch == Batch::First) {
+        _hardware.gimbal.SetCompare(gimbalGrabCompare);
+        HAL_Delay(50);
+        move(_chassis, MoveDirection::Forward, 890.0);
+    } else {
+        printHmiValue(_hardware, 50);
+        move(_chassis, MoveDirection::Backward, 970.0);
+        move(_chassis, MoveDirection::Rotate, 88.0);
+        move(_chassis, MoveDirection::Backward, 915.0);
+    }
+
+    for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+        if (itemIndex == 0) {
+            if (_batch == Batch::First) {
+                HAL_Delay(100);
+            }
+            _hardware.plate.SetCompare(plateCompare[itemIndex]);
+            HAL_Delay(100);
+        } else {
+            cameraBuffer[0] = 0;
+            _hardware.gimbal.SetCompare(gimbalGrabCompare);
+            HAL_Delay(_batch == Batch::First ? 20 : 50);
+            _hardware.plate.SetCompare(plateCompare[itemIndex]);
+            HAL_Delay(_batch == Batch::First ? 20 : 100);
+        }
+
+        do {
+            receiveRawMaterial(
+                _hardware,
+                cameraBuffer,
+                cameraData,
+                itemIndex == itemCount - 1,
+                _batch == Batch::First);
+        } while (
+            cameraData[0] !=
+            _mission.batches[batchIndex][itemIndex].color);
+
+        pickRawMaterial(
+            _hardware,
+            itemIndex == itemCount - 1,
+            _batch == Batch::First);
+    }
+}
+
+void moveToRoughSlot(
+    Rs485Chassis &_chassis,
+    const uint8_t _targetSlot,
+    uint8_t &_currentSlot,
+    const double _slotPitchMm)
+{
+    const int8_t delta =
+        static_cast<int8_t>(_targetSlot) -
+        static_cast<int8_t>(_currentSlot);
+
+    switch (delta) {
+        case -2:
+            move(_chassis, MoveDirection::Forward, 2.0 * _slotPitchMm);
+            break;
+        case -1:
+            move(_chassis, MoveDirection::Forward, _slotPitchMm);
+            break;
+        case 0:
+            break;
+        case 1:
+            move(_chassis, MoveDirection::Backward, _slotPitchMm);
+            break;
+        case 2:
+            move(_chassis, MoveDirection::Backward, 2.0 * _slotPitchMm);
+            break;
+        default:
+            return;
+    }
+
+    _currentSlot = _targetSlot;
+}
+
+void correctCameraOffset(
+    Rs485Chassis &_chassis,
+    const CameraData &_cameraData,
+    const double _xRate,
+    const double _yRate)
+{
+    if (_cameraData[0] <= 0) {
+        move(
+            _chassis,
+            MoveDirection::Forward,
+            std::abs(static_cast<double>(_cameraData[0])) / _xRate);
+    } else {
+        move(
+            _chassis,
+            MoveDirection::Backward,
+            static_cast<double>(_cameraData[0]) / _xRate);
+    }
+
+    HAL_Delay(20);
+
+    if (_cameraData[1] <= 0) {
+        move(
+            _chassis,
+            MoveDirection::Right,
+            std::abs(static_cast<double>(_cameraData[1])) / _yRate + 3.0);
+    } else {
+        move(
+            _chassis,
+            MoveDirection::Left,
+            static_cast<double>(_cameraData[1]) / _yRate - 3.0);
+    }
+}
+
+void alignWithCamera(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const AlignmentProfile &_profile)
+{
+    CameraBuffer cameraBuffer{};
+    CameraData cameraData{};
+
+    while (cameraData[0] == 0) {
+        if (_profile.firstReceiveDelayBeforeMs != 0) {
+            HAL_Delay(_profile.firstReceiveDelayBeforeMs);
+        }
+
+        _hardware.camera.ReceiveDMA(
+            reinterpret_cast<uint8_t *>(cameraBuffer.data()), 10);
+
+        if (_profile.firstReceiveDelayAfterMs != 0) {
+            HAL_Delay(_profile.firstReceiveDelayAfterMs);
+        }
+
+        std::sscanf(
+            cameraBuffer.data(),
+            "#%d,%d",
+            &cameraData[0],
+            &cameraData[1]);
+    }
+
+    correctCameraOffset(
+        _chassis,
+        cameraData,
+        _profile.xRate,
+        _profile.yRate);
+    HAL_Delay(20);
+
+    _hardware.camera.ReceiveDMA(
+        reinterpret_cast<uint8_t *>(cameraBuffer.data()), 10);
+    HAL_Delay(20);
+    std::sscanf(
+        cameraBuffer.data(),
+        "#%d,%d",
+        &cameraData[0],
+        &cameraData[1]);
+
+    correctCameraOffset(
+        _chassis,
+        cameraData,
+        _profile.xRate,
+        _profile.yRate);
+}
+
+void executeStorageTransfer(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const double _outerTravelMm,
+    const AlignmentProfile &_alignment,
+    const bool _isFirstItem)
+{
+    if (_isFirstItem) {
+        _hardware.gimbal.SetCompare(gimbalGrabCompare);
+        HAL_Delay(1500);
+    }
+
+    moveElevation(_hardware, _outerTravelMm, ElevationDirection::Down);
+    alignWithCamera(_hardware, _chassis, _alignment);
+    moveElevation(_hardware, _outerTravelMm, ElevationDirection::Up);
+    HAL_Delay(2000);
+    _hardware.gimbal.SetCompare(gimbalPlaceCompare);
+    HAL_Delay(1500);
+    moveElevation(_hardware, 14.3, ElevationDirection::Down);
+    _hardware.arm.SetCompare(armGrabCompare);
+    HAL_Delay(1500);
+    moveElevation(_hardware, 14.3, ElevationDirection::Up);
+    _hardware.gimbal.SetCompare(gimbalGrabCompare);
+    HAL_Delay(1500);
+    moveElevation(_hardware, _outerTravelMm, ElevationDirection::Down);
+    HAL_Delay(20);
+    _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(500);
+    moveElevation(_hardware, _outerTravelMm, ElevationDirection::Up);
+}
+
+void executeReplaceTransfer(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis)
+{
+    constexpr AlignmentProfile alignment{
+        highXRate,
+        highYRate,
+        0,
+        100,
+    };
+
+    alignWithCamera(_hardware, _chassis, alignment);
+    moveElevation(_hardware, 42.9, ElevationDirection::Down);
+    HAL_Delay(20);
+    _hardware.arm.SetCompare(armGrabCompare);
+    HAL_Delay(20);
+    moveElevation(_hardware, 42.9, ElevationDirection::Up);
+    HAL_Delay(20);
+    _hardware.gimbal.SetCompare(gimbalPlaceCompare);
+    HAL_Delay(1000);
+    moveElevation(_hardware, 7.15, ElevationDirection::Down);
+    _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(20);
+    moveElevation(_hardware, 7.15, ElevationDirection::Up);
+    _hardware.gimbal.SetCompare(gimbalGrabCompare);
+    HAL_Delay(20);
+    _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(20);
+}
+
+void runRoughStage(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const Mission &_mission,
+    const Batch _batch,
+    uint8_t &_currentRoughSlot)
+{
+    const uint8_t batchIndex = toIndex(_batch);
+    const double slotPitchMm = _batch == Batch::First ? 160.0 : 150.0;
+    const AlignmentProfile alignment{
+        lowXRate,
+        lowYRate,
+        _batch == Batch::First ? 1000U : 0U,
+        _batch == Batch::First ? 20U : 100U,
+    };
+
+    if (_batch == Batch::Second) {
+        printHmiValue(_hardware, 62);
+    }
+
+    _hardware.gimbal.SetCompare(gimbalGrabCompare);
+    HAL_Delay(20);
+    _hardware.plate.SetCompare(plateCompare[0]);
+    HAL_Delay(20);
+    printHmiValue(_hardware, _batch == Batch::First ? 12 : 11);
+
+    move(_chassis, MoveDirection::Left, 1835.0);
+    move(_chassis, MoveDirection::Rotate, 175.0);
+
+    for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+        _hardware.plate.SetCompare(plateCompare[itemIndex]);
+        HAL_Delay(20);
+
+        moveToRoughSlot(
+            _chassis,
+            _mission.batches[batchIndex][itemIndex].roughSlot,
+            _currentRoughSlot,
+            slotPitchMm);
+
+        executeStorageTransfer(
+            _hardware,
+            _chassis,
+            42.9,
+            alignment,
+            itemIndex == 0);
+    }
+
+    moveToRoughSlot(
+        _chassis,
+        roughCenterSlot,
+        _currentRoughSlot,
+        slotPitchMm);
+}
+
+void runReplaceStage(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const Mission &_mission,
+    const Batch _batch,
+    uint8_t &_currentRoughSlot)
+{
+    const uint8_t batchIndex = toIndex(_batch);
+    printHmiValue(_hardware, _batch == Batch::First ? 25 : 75);
+
+    for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+        _hardware.plate.SetCompare(plateCompare[itemIndex]);
+        HAL_Delay(20);
+
+        moveToRoughSlot(
+            _chassis,
+            _mission.batches[batchIndex][itemIndex].roughSlot,
+            _currentRoughSlot,
+            150.0);
+
+        executeReplaceTransfer(_hardware, _chassis);
+    }
+
+    moveToRoughSlot(
+        _chassis,
+        roughCenterSlot,
+        _currentRoughSlot,
+        150.0);
+}
+
+void runBufferStage(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const Mission &_mission,
+    const Batch _batch,
+    uint8_t &_currentRoughSlot)
+{
+    const uint8_t batchIndex = toIndex(_batch);
+    const double outerTravelMm =
+        _batch == Batch::First ? 42.9 : 20.02;
+    constexpr AlignmentProfile alignment{
+        lowXRate,
+        lowYRate,
+        1000,
+        20,
+    };
+
+    if (_batch == Batch::First) {
+        printHmiValue(_hardware, 37);
+        move(_chassis, MoveDirection::Backward, 920.0);
+        move(_chassis, MoveDirection::Left, 880.0);
+    } else {
+        printHmiValue(_hardware, 87);
+        move(_chassis, MoveDirection::Backward, 830.0);
+        move(_chassis, MoveDirection::Left, 1015.0);
+    }
+
+    move(_chassis, MoveDirection::Rotate, 88.0);
+
+    for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
+        _hardware.plate.SetCompare(plateCompare[itemIndex]);
+        HAL_Delay(20);
+
+        moveToRoughSlot(
+            _chassis,
+            _mission.batches[batchIndex][itemIndex].roughSlot,
+            _currentRoughSlot,
+            150.0);
+
+        executeStorageTransfer(
+            _hardware,
+            _chassis,
+            outerTravelMm,
+            alignment,
+            itemIndex == 0);
+    }
+
+    if (_batch == Batch::Second) {
+        printHmiValue(_hardware, 100);
+    }
+
+    moveToRoughSlot(
+        _chassis,
+        roughCenterSlot,
+        _currentRoughSlot,
+        150.0);
+}
+
+void runHomeStage(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis)
+{
+    _hardware.gimbal.SetCompare(gimbalPlaceCompare);
+    HAL_Delay(50);
+    move(_chassis, MoveDirection::Backward, 970.0);
+    move(_chassis, MoveDirection::Left, 1850.0);
+    move(_chassis, MoveDirection::Backward, 115.0);
+}
+
+} // namespace
+
+extern "C" [[noreturn]] void Main()
+{
+    RobotHardware hardware;
+    Mission mission;
+    uint8_t currentRoughSlot = roughCenterSlot;
+
+    Rs485Chassis &chassis = init(hardware);
+    resetMechanism(hardware);
+    scanMission(hardware, chassis, mission, QrDirection::Left);
+
+    runRawStage(hardware, chassis, mission, Batch::First);
+    runRoughStage(hardware, chassis, mission, Batch::First, currentRoughSlot);
+    runReplaceStage(hardware, chassis, mission, Batch::First, currentRoughSlot);
+    runBufferStage(hardware, chassis, mission, Batch::First, currentRoughSlot);
+
+    runRawStage(hardware, chassis, mission, Batch::Second);
+    runRoughStage(hardware, chassis, mission, Batch::Second, currentRoughSlot);
+    runReplaceStage(hardware, chassis, mission, Batch::Second, currentRoughSlot);
+    runBufferStage(hardware, chassis, mission, Batch::Second, currentRoughSlot);
+
+    runHomeStage(hardware, chassis);
+
+    for (;;) {
+    }
 }

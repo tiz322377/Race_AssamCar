@@ -29,8 +29,6 @@ static constexpr double pi = 3.14159265358979323846;
 
 namespace Platform::Chassis
 {
-    MecanumChassis<RS485Bus> *MCRSBPtr = nullptr;
-
     void MecanumChassis<RS485Bus>::SetRotateFixFactor(const double _factor)
     {
         rotateFixFactor = _factor;

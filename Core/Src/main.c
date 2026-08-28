@@ -51,6 +51,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static volatile uint32_t elevationPulseTarget = 0;
+static volatile uint32_t elevationPulseCount = 0;
+static volatile bool elevationPulseCompleted = false;
 
 /* USER CODE END PV */
 
@@ -62,6 +65,17 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void ElevationPulseCounterReset(uint32_t target)
+{
+    elevationPulseCount = 0;
+    elevationPulseTarget = target;
+    elevationPulseCompleted = false;
+}
+
+bool ElevationPulseCounterIsCompleted(void)
+{
+    return elevationPulseCompleted;
+}
 
 /* USER CODE END 0 */
 
@@ -172,13 +186,13 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
     if ((htim->Instance == TIM2) &&
         (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)) {
 
-        PULSE_COUNT++;
+        elevationPulseCount++;
 
-        if (PULSE_COUNT >= PULSE_TARGET) {
+        if (elevationPulseCount >= elevationPulseTarget) {
             HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
-            PULSE_COMPLETED = true;
+            elevationPulseCompleted = true;
         }
-        }
+    }
 }
 /* USER CODE END 4 */
 

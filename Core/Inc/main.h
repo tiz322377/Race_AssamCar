@@ -53,15 +53,14 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+void ElevationPulseCounterReset(uint32_t target);
+bool ElevationPulseCounterIsCompleted(void);
 
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
-extern volatile uint32_t PULSE_TARGET;  // 目标脉冲数
-extern volatile uint32_t PULSE_COUNT;   // 当前已发脉冲数
-extern volatile bool PULSE_COMPLETED; //已完成标志
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
