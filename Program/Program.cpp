@@ -8,10 +8,12 @@
 #include "Config/Config.hpp"
 #include "Peripheral/Mode.hpp"
 #include "Peripheral/TIM.hpp"
+#include "Peripheral/I2C.hpp"
 #include "Platform/Chassis/ChassisU.hpp"
 #include "Platform/Chassis/Mecanum/RS485Bus/RS485Bus.hpp"
 
 #include "tim.h"
+#include "i2c.h"
 #include "usart.h"
 
 #include <cmath>
@@ -31,6 +33,7 @@ const auto bus = Uart<DMA>(&huart4);
 const auto gimbal = PwmChannel<Normal>(&htim1,TIM_CHANNEL_1);
 const auto plate = PwmChannel<Normal>(&htim1,TIM_CHANNEL_2);
 const auto arm = PwmChannel<Normal>(&htim1,TIM_CHANNEL_3);
+const auto JY901P = I2C<Master,I2CWorkMode::DMA>(&hi2c1);
 const auto en_elevation = GPIOPin<Output>(GPIOA,GPIO_PIN_6);
 const auto step_elevation = PwmChannel<Normal>(&htim2,TIM_CHANNEL_1);
 const auto dir_elevation = GPIOPin<Output>(GPIOA,GPIO_PIN_4);
@@ -50,8 +53,10 @@ constexpr auto GIMBAL_PLACE = 180;
 constexpr auto ARM_GRAB = 260;
 constexpr auto ARM_PLACE = 220;
 uint8_t PLATE_MEMORY[3] = {75,160,250};
-float X_Rate = 3.0;
-float Y_Rate = 1.4;
+float Xlow_Rate = 3.2;
+float Ylow_Rate = 1.6;
+float Xhigh_Rate = 6.4;
+float Yhigh_Rate = 3.2;
 int8_t Ring_Rough = 2;
 
 void Init()
@@ -361,7 +366,7 @@ void Row1Event(){
                     Elevation_Move(7.15,Up);
                     while (PULSE_COMPLETED != true){};
                     HAL_Delay(50);
-                    const char message[4] = {"OK!"};
+                    constexpr char message[5] = {"OK!\n"};
                     camera.Send(message,sizeof(message),100);
                     HAL_Delay(50);
                     robot.step = ActionState::Finish;
@@ -429,25 +434,44 @@ void Rough1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -504,25 +528,44 @@ void Rough1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -579,25 +622,44 @@ void Rough1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -689,25 +751,44 @@ void Replace1Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -761,25 +842,44 @@ void Replace1Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -834,25 +934,44 @@ void Replace1Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -911,7 +1030,7 @@ void Buffer1Event(){
         case ActionState::Start://x2085y1070
             print("%s=%d \xff\xff\xff",HMI_valcontrol,37);
             MCRSBPtr->RunTaskTime(MoveDirection::Backward,920.0f);//x2085y1990
-            MCRSBPtr->RunTaskTime(MoveDirection::Left,865.0f);//x1220y1990
+            MCRSBPtr->RunTaskTime(MoveDirection::Left,880.0f);//x1220y1990
             int8_t temp;
             robot.step = ActionState::Go;
             break;
@@ -956,25 +1075,44 @@ void Buffer1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -1031,25 +1169,44 @@ void Buffer1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -1106,25 +1263,44 @@ void Buffer1Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -1145,7 +1321,7 @@ void Buffer1Event(){
             HAL_Delay(500);
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
-            const char message[4] = {"KO!"};
+            constexpr char message[5] = {"KO!\n"};
             camera.Send(message,sizeof(message),100);
             HAL_Delay(50);
             robot.step = ActionState::Wait;
@@ -1291,7 +1467,7 @@ void Row2Event(){
                 Elevation_Move(7.15,Up);
                 while (PULSE_COMPLETED != true){};
                 HAL_Delay(50);
-                const char message[4] = {"OK!"};
+                constexpr char message[5] = {"OK!\n"};
                 camera.Send(message,sizeof(message),100);
                 robot.step = ActionState::Finish;
             }
@@ -1358,47 +1534,66 @@ void Rough2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
            if (camera_data[0] <= 0) {
                camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
            }
            else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-           }
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
            }
            HAL_Delay(20);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(2000);
-            gimbal.SetCompare(GIMBAL_PLACE);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Down);
-            while (PULSE_COMPLETED != true){};
-            arm.SetCompare(ARM_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(14.3,Up);
-            while (PULSE_COMPLETED != true){};
-            gimbal.SetCompare(GIMBAL_GRAB);
-            HAL_Delay(1500);
-            Elevation_Move(42.9,Down);
-            while (PULSE_COMPLETED != true){};
-            HAL_Delay(20);
-            arm.SetCompare(ARM_PLACE);
-            HAL_Delay(500);
-            Elevation_Move(42.9,Up);
-            while (PULSE_COMPLETED != true){};
-            robot.step = ActionState::GoSecond;
-            break;
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
+           HAL_Delay(20);
+           camera.ReceiveDMA((uint8_t *)camera_message,10);
+           HAL_Delay(20);
+           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+           if (camera_data[0] <= 0) {
+               camera_data[0] = std::abs(camera_data[0]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+           }
+           else if (camera_data[0] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+           }
+           HAL_Delay(20);
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
+           Elevation_Move(42.9,Up);
+           while (PULSE_COMPLETED != true){};
+           HAL_Delay(2000);
+           gimbal.SetCompare(GIMBAL_PLACE);
+           HAL_Delay(1500);
+           Elevation_Move(14.3,Down);
+           while (PULSE_COMPLETED != true){};
+           arm.SetCompare(ARM_GRAB);
+           HAL_Delay(1500);
+           Elevation_Move(14.3,Up);
+           while (PULSE_COMPLETED != true){};
+           gimbal.SetCompare(GIMBAL_GRAB);
+           HAL_Delay(1500);
+           Elevation_Move(42.9,Down);
+           while (PULSE_COMPLETED != true){};
+           HAL_Delay(20);
+           arm.SetCompare(ARM_PLACE);
+           HAL_Delay(500);
+           Elevation_Move(42.9,Up);
+           while (PULSE_COMPLETED != true){};
+           robot.step = ActionState::GoSecond;
+           break;
 
         case ActionState::GoSecond:
             plate.SetCompare(PLATE_MEMORY[1]);
@@ -1432,25 +1627,44 @@ void Rough2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
            if (camera_data[0] <= 0) {
                camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
            }
            else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-           }
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
            }
            HAL_Delay(20);
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
+           HAL_Delay(20);
+           camera.ReceiveDMA((uint8_t *)camera_message,10);
+           HAL_Delay(20);
+           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+           if (camera_data[0] <= 0) {
+               camera_data[0] = std::abs(camera_data[0]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+           }
+           else if (camera_data[0] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+           }
+           HAL_Delay(20);
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
             Elevation_Move(42.9,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -1506,25 +1720,44 @@ void Rough2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
            if (camera_data[0] <= 0) {
                camera_data[0] = std::abs(camera_data[0]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
            }
            else if (camera_data[0] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-           }
-           if (camera_data[1] <= 0) {
-               camera_data[1] = std::abs(camera_data[1]);
-               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-           }
-           else if (camera_data[1] >= 0) {
-               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
            }
            HAL_Delay(20);
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
+           HAL_Delay(20);
+           camera.ReceiveDMA((uint8_t *)camera_message,10);
+           HAL_Delay(20);
+           sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+           if (camera_data[0] <= 0) {
+               camera_data[0] = std::abs(camera_data[0]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+           }
+           else if (camera_data[0] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+           }
+           HAL_Delay(20);
+           if (camera_data[1] <= 0) {
+               camera_data[1] = std::abs(camera_data[1]);
+               MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+           }
+           else if (camera_data[1] >= 0) {
+               MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+           }
            Elevation_Move(42.9,Up);
            while (PULSE_COMPLETED != true){};
            HAL_Delay(2000);
@@ -1617,25 +1850,44 @@ void Replace2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -1689,25 +1941,44 @@ void Replace2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -1762,25 +2033,44 @@ void Replace2Event(){
             camera_data[0] = 0;
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(100);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xhigh_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xhigh_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Yhigh_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Yhigh_Rate - 3.0);
+            }
             Elevation_Move(42.9,Down);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(20);
@@ -1884,25 +2174,44 @@ void Buffer2Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(20.02,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -1959,25 +2268,44 @@ void Buffer2Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(20.02,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);
@@ -2034,25 +2362,44 @@ void Buffer2Event(){
             camera_data[1] = 0;
             while (camera_data[0] == 0) {
                 HAL_Delay(1000);
-                camera.ReceiveDMA((uint8_t *)camera_message,14);
+                camera.ReceiveDMA((uint8_t *)camera_message,10);
                 HAL_Delay(20);
                 sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
             };
             if (camera_data[0] <= 0) {
                 camera_data[0] = std::abs(camera_data[0]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / X_Rate);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
             }
             else if (camera_data[0] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / X_Rate);
-            }
-            if (camera_data[1] <= 0) {
-                camera_data[1] = std::abs(camera_data[1]);
-                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Y_Rate + 3.0);
-            }
-            else if (camera_data[1] >= 0) {
-                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Y_Rate - 3.0);
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
             }
             HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
+            HAL_Delay(20);
+            camera.ReceiveDMA((uint8_t *)camera_message,10);
+            HAL_Delay(20);
+            sscanf(camera_message,"#%d,%d",camera_data+0,camera_data+1);
+            if (camera_data[0] <= 0) {
+                camera_data[0] = std::abs(camera_data[0]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Forward,camera_data[0] / Xlow_Rate);
+            }
+            else if (camera_data[0] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Backward,camera_data[0] / Xlow_Rate);
+            }
+            HAL_Delay(20);
+            if (camera_data[1] <= 0) {
+                camera_data[1] = std::abs(camera_data[1]);
+                MCRSBPtr->RunTaskTime(MoveDirection::Right,camera_data[1] / Ylow_Rate + 3.0);
+            }
+            else if (camera_data[1] >= 0) {
+                MCRSBPtr->RunTaskTime(MoveDirection::Left,camera_data[1] / Ylow_Rate - 3.0);
+            }
             Elevation_Move(20.02,Up);
             while (PULSE_COMPLETED != true){};
             HAL_Delay(2000);

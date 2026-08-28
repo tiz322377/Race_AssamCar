@@ -4,7 +4,7 @@
 
 #ifndef I2C_HPP
 #define I2C_HPP
-#ifdef HAL_I2C_MODULE_ENABLE
+#ifdef HAL_I2C_MODULE_ENABLED
 #include "Config/Config.hpp"
 
 namespace Peripheral {
