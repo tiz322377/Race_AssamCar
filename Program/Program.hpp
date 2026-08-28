@@ -41,6 +41,8 @@ enum class RobotState : uint8_t {
     Buffer1,
     Buffer2,
 
+    Home,
+
     Finish,
 };
 
@@ -95,6 +97,7 @@ void Row2Event();
 void Rough2Event();
 void Replace2Event();
 void Buffer2Event();
+void HomeEvent();
 void print(const char*format,...);
 void Elevation_Move(double distance,Dir dir);
 
