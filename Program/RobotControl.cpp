@@ -79,7 +79,7 @@ Rs485Chassis &init(RobotHardware &_hardware)
 
     // The elevation stepper driver's enable input is active-low.
     _hardware.elevationEnable.Write(false);
-    _hardware.elevationPwm.SetCompare(1000);
+    _hardware.elevationPwm.SetCompare(84);
 
     Rs485Chassis &chassis = Rs485Chassis::Create(
         addresses.data(),

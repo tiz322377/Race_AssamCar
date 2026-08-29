@@ -51,24 +51,25 @@ void pickRawMaterial(
     HAL_Delay(100);
     _hardware.arm.SetCompare(armGrabCompare);
     HAL_Delay(1000);
-    moveElevation(_hardware, 14.3, ElevationDirection::Up);
+    moveElevation(_hardware, 12.87, ElevationDirection::Up);
     _hardware.gimbal.SetCompare(gimbalPlaceCompare);
     HAL_Delay(2000);
     _hardware.arm.SetCompare(armPlaceCompare);
-    moveElevation(_hardware, 7.15, ElevationDirection::Up);
+    moveElevation(_hardware, 8.58, ElevationDirection::Up);
+    HAL_Delay(500);
 
     if (!_isLastItem) {
         HAL_Delay(100);
         return;
     }
 
-    HAL_Delay(50);
-    constexpr char message[] = "OK!\n";
-    _hardware.camera.Send(message, sizeof(message), 100);
+    // HAL_Delay(50);
+    // constexpr char message[] = "OK!\n";
+    // _hardware.camera.Send(message, sizeof(message), 100);
 
-    if (_delayAfterAcknowledgement) {
-        HAL_Delay(50);
-    }
+    // if (_delayAfterAcknowledgement) {
+    //     HAL_Delay(50);
+    // }
 }
 
 } // namespace

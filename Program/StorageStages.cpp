@@ -53,6 +53,7 @@ void executeStorageTransfer(
     }
 
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Down);
+    HAL_Delay(800);
     alignWithCamera(_hardware, _chassis, _alignment);
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Up);
     HAL_Delay(2000);
@@ -60,12 +61,12 @@ void executeStorageTransfer(
     HAL_Delay(1500);
     moveElevation(_hardware, 7.15, ElevationDirection::Down);
     _hardware.arm.SetCompare(armGrabCompare);
-    HAL_Delay(1500);
+    HAL_Delay(500);
     moveElevation(_hardware, 7.15, ElevationDirection::Up);
     _hardware.gimbal.SetCompare(gimbalGrabCompare);
     HAL_Delay(1500);
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Down);
-    HAL_Delay(20);
+    HAL_Delay(500);
     _hardware.arm.SetCompare(armPlaceCompare);
     HAL_Delay(500);
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Up);
@@ -78,25 +79,26 @@ void executeReplaceTransfer(
     constexpr AlignmentProfile alignment{
         highXRate,
         highYRate,
-        0,
+        300,
         100,
     };
 
     alignWithCamera(_hardware, _chassis, alignment);
+    HAL_Delay(800);
     moveElevation(_hardware, 42.9, ElevationDirection::Down);
-    HAL_Delay(20);
+    HAL_Delay(500);
     _hardware.arm.SetCompare(armGrabCompare);
-    HAL_Delay(20);
+    HAL_Delay(500);
     moveElevation(_hardware, 42.9, ElevationDirection::Up);
-    HAL_Delay(20);
+    HAL_Delay(500);
     _hardware.gimbal.SetCompare(gimbalPlaceCompare);
     HAL_Delay(1000);
-    moveElevation(_hardware, 7.15, ElevationDirection::Down);
+    moveElevation(_hardware, 6.435, ElevationDirection::Down);
+    HAL_Delay(500);
     _hardware.arm.SetCompare(armPlaceCompare);
-    HAL_Delay(20);
-    moveElevation(_hardware, 7.15, ElevationDirection::Up);
+    moveElevation(_hardware, 6.435, ElevationDirection::Up);
     _hardware.gimbal.SetCompare(gimbalGrabCompare);
-    HAL_Delay(20);
+    HAL_Delay(500);
     _hardware.arm.SetCompare(armPlaceCompare);
     HAL_Delay(20);
 }
@@ -115,8 +117,8 @@ void runRoughStage(
     const AlignmentProfile alignment{
         lowXRate,
         lowYRate,
-        _batch == Batch::First ? 1000U : 0U,
-        _batch == Batch::First ? 20U : 100U,
+        500U,
+        500U,
     };
 
     if (_batch == Batch::Second) {
@@ -206,11 +208,11 @@ void runBufferStage(
 
     if (_batch == Batch::First) {
         printHmiValue(_hardware, 37);
-        move(_chassis, MoveDirection::Backward, 870.0);
+        move(_chassis, MoveDirection::Backward, 920.0);
         move(_chassis, MoveDirection::Left, 910.0);
     } else {
         printHmiValue(_hardware, 87);
-        move(_chassis, MoveDirection::Backward, 830.0);
+        move(_chassis, MoveDirection::Backward, 880.0);
         move(_chassis, MoveDirection::Left, 1015.0);
     }
 

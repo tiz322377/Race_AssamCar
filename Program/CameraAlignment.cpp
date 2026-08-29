@@ -21,7 +21,7 @@ void correctCameraOffset(
             _chassis,
             MoveDirection::Forward,
             std::abs(static_cast<double>(_cameraData[0])) / _xRate);
-    } else {
+    } else if (_cameraData[0] >= 0) {
         move(
             _chassis,
             MoveDirection::Backward,
@@ -35,7 +35,7 @@ void correctCameraOffset(
             _chassis,
             MoveDirection::Right,
             std::abs(static_cast<double>(_cameraData[1])) / _yRate);
-    } else {
+    } else if (_cameraData[1] >= 0) {
         move(
             _chassis,
             MoveDirection::Left,
@@ -53,13 +53,15 @@ void alignWithCamera(
     CameraBuffer cameraBuffer{};
     CameraData cameraData{};
 
-    while (cameraData[0] == 0) {
+    while (cameraBuffer[0] != '*') {
         if (_profile.firstReceiveDelayBeforeMs != 0) {
             HAL_Delay(_profile.firstReceiveDelayBeforeMs);
+            constexpr char message[] = "OK!\n";
+            _hardware.camera.Send(message, sizeof(message), 100);
         }
 
         _hardware.camera.ReceiveDMA(
-            reinterpret_cast<uint8_t *>(cameraBuffer.data()), 10);
+            reinterpret_cast<uint8_t *>(cameraBuffer.data()), 12);
 
         if (_profile.firstReceiveDelayAfterMs != 0) {
             HAL_Delay(_profile.firstReceiveDelayAfterMs);
@@ -67,7 +69,7 @@ void alignWithCamera(
 
         std::sscanf(
             cameraBuffer.data(),
-            "#%d,%d",
+            "*%d,%d",
             &cameraData[0],
             &cameraData[1]);
     }
@@ -78,6 +80,8 @@ void alignWithCamera(
         _profile.xRate,
         _profile.yRate);
     HAL_Delay(20);
+    constexpr char message[] = "KO!\n";
+    _hardware.camera.Send(message, sizeof(message), 100);
 
     // _hardware.camera.ReceiveDMA(
     //     reinterpret_cast<uint8_t *>(cameraBuffer.data()), 10);

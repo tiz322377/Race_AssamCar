@@ -26,14 +26,14 @@ inline constexpr uint8_t itemCount = 3;
 inline constexpr uint8_t roughCenterSlot = 2;
 
 inline constexpr uint32_t gimbalGrabCompare = 72;
-inline constexpr uint32_t gimbalPlaceCompare = 180;
+inline constexpr uint32_t gimbalPlaceCompare = 181;
 inline constexpr uint32_t armGrabCompare = 260;
 inline constexpr uint32_t armPlaceCompare = 220;
 
-inline constexpr std::array<uint32_t, itemCount> plateCompare{75, 160, 250};
+inline constexpr std::array<uint32_t, itemCount> plateCompare{72, 155, 245};
 
 inline constexpr double lowXRate = 3.45;
-inline constexpr double lowYRate = 4.2;
+inline constexpr double lowYRate = 4.8;
 inline constexpr double highXRate = 6.4;
 inline constexpr double highYRate = 3.2;
 
@@ -87,7 +87,7 @@ struct RobotHardware {
     OutputPin elevationDirection;
 };
 
-using CameraBuffer = std::array<char, 15>;
+using CameraBuffer = std::array<char, 13>;
 using CameraData = std::array<int, 3>;
 
 constexpr uint8_t toIndex(const Batch _batch)
