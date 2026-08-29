@@ -1,5 +1,6 @@
 #include "Stages.hpp"
 
+#include "CameraAlignment.hpp"
 #include "RobotControl.hpp"
 
 #include "main.h"
@@ -84,6 +85,12 @@ void runRawStage(
     const uint8_t batchIndex = toIndex(_batch);
     CameraBuffer cameraBuffer{};
     CameraData cameraData{7, 0, 0};
+    constexpr AlignmentProfile alignment{
+        rawXRate,
+        rawYRate,
+        300,
+        100,
+    };
 
     if (_batch == Batch::First) {
         _hardware.gimbal.SetCompare(gimbalGrabCompare);
@@ -121,6 +128,8 @@ void runRawStage(
         } while (
             cameraData[0] !=
             _mission.batches[batchIndex][itemIndex].color);
+
+        alignRawWithCamera(_hardware, _chassis, alignment);
 
         pickRawMaterial(
             _hardware,

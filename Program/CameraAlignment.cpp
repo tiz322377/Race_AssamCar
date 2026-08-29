@@ -85,4 +85,43 @@ void alignRoughWithCamera(
 
 }
 
+void alignRawWithCamera(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const AlignmentProfile &_profile)
+{
+    CameraBuffer cameraBuffer{};
+    CameraData cameraData{};
+
+    while (cameraBuffer[0] != '#') {
+        if (_profile.firstReceiveDelayBeforeMs != 0) {
+            HAL_Delay(_profile.firstReceiveDelayBeforeMs);
+            constexpr char message[] = "KO!\n";
+            _hardware.camera.Send(message, sizeof(message), 100);
+        }
+
+        _hardware.camera.ReceiveDMA(
+            reinterpret_cast<uint8_t *>(cameraBuffer.data()), 12);
+
+        if (_profile.firstReceiveDelayAfterMs != 0) {
+            HAL_Delay(_profile.firstReceiveDelayAfterMs);
+        }
+
+        std::sscanf(
+            cameraBuffer.data(),
+            "#%*d,%d,%d",
+            &cameraData[0],
+            &cameraData[1]);
+    }
+
+    correctCameraOffset(
+        _chassis,
+        cameraData,
+        _profile.xRate,
+        _profile.yRate);
+    HAL_Delay(20);
+    constexpr char message[] = "OK!\n";
+    _hardware.camera.Send(message, sizeof(message), 100);
+
+}
 } // namespace Program

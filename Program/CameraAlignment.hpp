@@ -10,6 +10,11 @@ void alignRoughWithCamera(
     Rs485Chassis &_chassis,
     const AlignmentProfile &_profile);
 
+void alignRawWithCamera(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const AlignmentProfile &_profile);
+
 } // namespace Program
 
 #endif // CAMERA_ALIGNMENT_HPP

@@ -36,6 +36,8 @@ inline constexpr double lowXRate = 3.45;
 inline constexpr double lowYRate = 4.8;
 inline constexpr double highXRate = 6.4;
 inline constexpr double highYRate = 3.2;
+inline constexpr double rawXRate = 3.33;
+inline constexpr double rawYRate = 3.95;
 
 enum class Batch : uint8_t {
     First,
