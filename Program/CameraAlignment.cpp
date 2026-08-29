@@ -96,8 +96,8 @@ void alignRawWithCamera(
     while (cameraBuffer[0] != '#') {
         if (_profile.firstReceiveDelayBeforeMs != 0) {
             HAL_Delay(_profile.firstReceiveDelayBeforeMs);
-            constexpr char message[] = "KO!\n";
-            _hardware.camera.Send(message, sizeof(message), 100);
+            // constexpr char message[] = "KO!\n";
+            // _hardware.camera.Send(message, sizeof(message), 100);
         }
 
         _hardware.camera.ReceiveDMA(
@@ -120,8 +120,8 @@ void alignRawWithCamera(
         _profile.xRate,
         _profile.yRate);
     HAL_Delay(20);
-    constexpr char message[] = "OK!\n";
-    _hardware.camera.Send(message, sizeof(message), 100);
+    // constexpr char message[] = "OK!\n";
+    // _hardware.camera.Send(message, sizeof(message), 100);
 
 }
 } // namespace Program

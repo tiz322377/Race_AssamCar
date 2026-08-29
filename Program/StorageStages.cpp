@@ -83,7 +83,7 @@ void executeReplaceTransfer(
         100,
     };
 
-    alignRoughWithCamera(_hardware, _chassis, alignment);
+    alignRawWithCamera(_hardware, _chassis, alignment);
     HAL_Delay(800);
     moveElevation(_hardware, 42.9, ElevationDirection::Down);
     HAL_Delay(500);
@@ -213,8 +213,8 @@ void runBufferStage(
         move(_chassis, MoveDirection::Left, 910.0);
     } else {
         printHmiValue(_hardware, 87);
-        move(_chassis, MoveDirection::Backward, 880.0);
-        move(_chassis, MoveDirection::Left, 1015.0);
+        move(_chassis, MoveDirection::Backward, 920.0);
+        move(_chassis, MoveDirection::Left, 910.0);
     }
 
     move(_chassis, MoveDirection::Rotate, 87.0);

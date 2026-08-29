@@ -88,8 +88,8 @@ void runRawStage(
     constexpr AlignmentProfile alignment{
         rawXRate,
         rawYRate,
-        300,
-        100,
+        50,
+        50,
     };
 
     if (_batch == Batch::First) {
@@ -110,6 +110,7 @@ void runRawStage(
             }
             _hardware.plate.SetCompare(plateCompare[itemIndex]);
             HAL_Delay(100);
+            alignRawWithCamera(_hardware, _chassis, alignment);
         } else {
             cameraBuffer[0] = 0;
             _hardware.gimbal.SetCompare(gimbalGrabCompare);
@@ -128,8 +129,6 @@ void runRawStage(
         } while (
             cameraData[0] !=
             _mission.batches[batchIndex][itemIndex].color);
-
-        alignRawWithCamera(_hardware, _chassis, alignment);
 
         pickRawMaterial(
             _hardware,

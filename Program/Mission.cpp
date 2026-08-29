@@ -79,7 +79,7 @@ void scanMission(
     if (_direction == QrDirection::Left) {
         move(_chassis, MoveDirection::Right, 985.0);
     } else {
-        move(_chassis, MoveDirection::Right, 820.0);
+        move(_chassis, MoveDirection::Right, 948.0);
     }
 }
 

@@ -34,7 +34,8 @@ void runBufferStage(
 
 void runHomeStage(
     RobotHardware &_hardware,
-    Rs485Chassis &_chassis);
+    Rs485Chassis &_chassis,
+    QrDirection _direction);
 
 } // namespace Program
 

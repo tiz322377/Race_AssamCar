@@ -10,6 +10,7 @@ extern "C" [[noreturn]] void Main()
     Program::RobotHardware hardware;
     Program::Mission mission;
     uint8_t currentRoughSlot = Program::roughCenterSlot;
+    constexpr Program::QrDirection qrDirection = Program::QrDirection::Left;
 
     Program::Rs485Chassis &chassis = Program::init(hardware);
     Program::resetMechanism(hardware);
@@ -17,7 +18,7 @@ extern "C" [[noreturn]] void Main()
         hardware,
         chassis,
         mission,
-        Program::QrDirection::Left);
+        qrDirection);
 
     Program::runRawStage(
         hardware,
@@ -67,7 +68,7 @@ extern "C" [[noreturn]] void Main()
         Program::Batch::Second,
         currentRoughSlot);
 
-    Program::runHomeStage(hardware, chassis);
+    Program::runHomeStage(hardware, chassis, qrDirection);
 
     for (;;) {
     }

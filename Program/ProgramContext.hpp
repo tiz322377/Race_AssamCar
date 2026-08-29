@@ -45,8 +45,8 @@ enum class Batch : uint8_t {
 };
 
 enum class QrDirection : uint8_t {
-    Left,
-    Right,
+    Left,//1
+    Right,//2
 };
 
 enum class ElevationDirection : uint8_t {
