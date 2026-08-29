@@ -54,7 +54,7 @@ void executeStorageTransfer(
 
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Down);
     HAL_Delay(800);
-    alignWithCamera(_hardware, _chassis, _alignment);
+    alignRoughWithCamera(_hardware, _chassis, _alignment);
     moveElevation(_hardware, _outerTravelMm, ElevationDirection::Up);
     HAL_Delay(2000);
     _hardware.gimbal.SetCompare(gimbalPlaceCompare);
@@ -83,7 +83,7 @@ void executeReplaceTransfer(
         100,
     };
 
-    alignWithCamera(_hardware, _chassis, alignment);
+    alignRoughWithCamera(_hardware, _chassis, alignment);
     HAL_Delay(800);
     moveElevation(_hardware, 42.9, ElevationDirection::Down);
     HAL_Delay(500);
@@ -96,11 +96,12 @@ void executeReplaceTransfer(
     moveElevation(_hardware, 6.435, ElevationDirection::Down);
     HAL_Delay(500);
     _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(500);
     moveElevation(_hardware, 6.435, ElevationDirection::Up);
     _hardware.gimbal.SetCompare(gimbalGrabCompare);
     HAL_Delay(500);
     _hardware.arm.SetCompare(armPlaceCompare);
-    HAL_Delay(20);
+    HAL_Delay(100);
 }
 
 } // namespace

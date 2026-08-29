@@ -5,7 +5,7 @@
 
 namespace Program {
 
-void alignWithCamera(
+void alignRoughWithCamera(
     RobotHardware &_hardware,
     Rs485Chassis &_chassis,
     const AlignmentProfile &_profile);

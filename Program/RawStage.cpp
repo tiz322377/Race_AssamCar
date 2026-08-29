@@ -55,6 +55,7 @@ void pickRawMaterial(
     _hardware.gimbal.SetCompare(gimbalPlaceCompare);
     HAL_Delay(2000);
     _hardware.arm.SetCompare(armPlaceCompare);
+    HAL_Delay(500);
     moveElevation(_hardware, 8.58, ElevationDirection::Up);
     HAL_Delay(500);
 
