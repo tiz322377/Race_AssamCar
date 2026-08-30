@@ -132,8 +132,9 @@ void runRoughStage(
     HAL_Delay(20);
     printHmiValue(_hardware, _batch == Batch::First ? 12 : 11);
 
-    move(_chassis, MoveDirection::Left, 1850.0);
-    move(_chassis, MoveDirection::Rotate, 175.0);
+    move(_chassis, MoveDirection::Rotate, -88.0);
+    move(_chassis, MoveDirection::Forward, 1845.0);
+    move(_chassis, MoveDirection::Rotate, -88.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
         _hardware.plate.SetCompare(plateCompare[itemIndex]);
@@ -207,17 +208,9 @@ void runBufferStage(
         20,
     };
 
-    if (_batch == Batch::First) {
-        printHmiValue(_hardware, 37);
-        move(_chassis, MoveDirection::Backward, 920.0);
-        move(_chassis, MoveDirection::Left, 910.0);
-    } else {
-        printHmiValue(_hardware, 87);
-        move(_chassis, MoveDirection::Backward, 920.0);
-        move(_chassis, MoveDirection::Left, 910.0);
-    }
-
+    move(_chassis, MoveDirection::Backward, 920.0);
     move(_chassis, MoveDirection::Rotate, 87.0);
+    move(_chassis, MoveDirection::Forward, 910.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
         _hardware.plate.SetCompare(plateCompare[itemIndex]);
