@@ -133,6 +133,17 @@ namespace Modules {
         return true;
     }
 
+    bool JY901P::ReadYaw(float &_yawDegrees) const
+    {
+        uint8_t data[2]{};
+        if (!readBytes(Register::Yaw, data, sizeof(data))) {
+            return false;
+        }
+
+        _yawDegrees = static_cast<float>(decodeSigned(data)) * angleScale;
+        return true;
+    }
+
     bool JY901P::ReadQuaternion(JY901PQuaternion &_quaternion) const
     {
         uint8_t data[8]{};

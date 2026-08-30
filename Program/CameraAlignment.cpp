@@ -11,6 +11,7 @@ namespace Program {
 namespace {
 
 void correctCameraOffset(
+    RobotHardware &_hardware,
     Rs485Chassis &_chassis,
     const CameraData &_cameraData,
     const double _xRate,
@@ -18,11 +19,13 @@ void correctCameraOffset(
 {
     if (_cameraData[0] <= 0) {
         move(
+            _hardware,
             _chassis,
             MoveDirection::Forward,
             std::abs(static_cast<double>(_cameraData[0])) / _xRate);
     } else if (_cameraData[0] >= 0) {
         move(
+            _hardware,
             _chassis,
             MoveDirection::Backward,
             static_cast<double>(_cameraData[0]) / _xRate);
@@ -32,11 +35,13 @@ void correctCameraOffset(
 
     if (_cameraData[1] <= 0) {
         move(
+            _hardware,
             _chassis,
             MoveDirection::Right,
             std::abs(static_cast<double>(_cameraData[1])) / _yRate);
     } else if (_cameraData[1] >= 0) {
         move(
+            _hardware,
             _chassis,
             MoveDirection::Left,
             static_cast<double>(_cameraData[1]) / _yRate);
@@ -75,6 +80,7 @@ void alignRoughWithCamera(
     }
 
     correctCameraOffset(
+        _hardware,
         _chassis,
         cameraData,
         _profile.xRate,
@@ -115,6 +121,7 @@ void alignRawWithCamera(
     }
 
     correctCameraOffset(
+        _hardware,
         _chassis,
         cameraData,
         _profile.xRate,

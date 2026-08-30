@@ -95,12 +95,12 @@ void runRawStage(
     if (_batch == Batch::First) {
         _hardware.gimbal.SetCompare(gimbalGrabCompare);
         HAL_Delay(50);
-        move(_chassis, MoveDirection::Forward, 890.0);
+        move(_hardware, _chassis, MoveDirection::Forward, 890.0);
     } else {
         printHmiValue(_hardware, 50);
-        move(_chassis, MoveDirection::Backward, 970.0);
-        move(_chassis, MoveDirection::Rotate, 88.0);
-        move(_chassis, MoveDirection::Backward, 915.0);
+        move(_hardware, _chassis, MoveDirection::Backward, 970.0);
+        move(_hardware, _chassis, MoveDirection::Rotate, 88.0);
+        move(_hardware, _chassis, MoveDirection::Backward, 915.0);
     }
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {

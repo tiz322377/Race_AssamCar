@@ -1,5 +1,6 @@
 #include "RobotControl.hpp"
 
+#include "i2c.h"
 #include "main.h"
 #include "tim.h"
 #include "usart.h"
@@ -11,12 +12,65 @@
 #include <cstring>
 
 namespace Program {
+namespace {
+
+constexpr double yawToleranceDegrees = 1.0;
+
+double normalizeAngleDelta(double _angleDegrees)
+{
+    while (_angleDegrees > 180.0) {
+        _angleDegrees -= 360.0;
+    }
+    while (_angleDegrees < -180.0) {
+        _angleDegrees += 360.0;
+    }
+    return _angleDegrees;
+}
+
+void rotateWithYawCorrection(
+    RobotHardware &_hardware,
+    Rs485Chassis &_chassis,
+    const double _targetDegrees)
+{
+    float startYawDegrees = 0.0f;
+    const bool hasStartYaw = _hardware.attitudeSensor.ReadYaw(startYawDegrees);
+
+    _chassis.RunTaskTime(MoveDirection::Rotate, _targetDegrees);
+
+    if (!hasStartYaw || std::abs(_targetDegrees) <= yawToleranceDegrees) {
+        return;
+    }
+
+    float endYawDegrees = 0.0f;
+    if (!_hardware.attitudeSensor.ReadYaw(endYawDegrees)) {
+        return;
+    }
+
+    const double measuredSensorDelta = normalizeAngleDelta(
+        static_cast<double>(endYawDegrees) - static_cast<double>(startYawDegrees));
+    if (std::abs(measuredSensorDelta) <= yawToleranceDegrees) {
+        return;
+    }
+
+    const bool commandIsClockwise = _targetDegrees > 0.0;
+    const bool sensorDeltaIsPositive = measuredSensorDelta > 0.0;
+    const double sensorToCommandSign = commandIsClockwise == sensorDeltaIsPositive ? 1.0 : -1.0;
+    const double measuredCommandDelta = measuredSensorDelta * sensorToCommandSign;
+    const double correctionDegrees = _targetDegrees - measuredCommandDelta;
+
+    if (std::abs(correctionDegrees) > yawToleranceDegrees) {
+        _chassis.RunTaskTime(MoveDirection::Rotate, correctionDegrees);
+    }
+}
+
+} // namespace
 
 RobotHardware::RobotHardware()
     : scanner(&huart1),
       hmi(&huart5),
       camera(&huart3),
       bus(&huart4),
+      attitudeSensor(&hi2c1),
       gimbal(&htim1, TIM_CHANNEL_1),
       plate(&htim1, TIM_CHANNEL_2),
       arm(&htim1, TIM_CHANNEL_3),
@@ -27,10 +81,16 @@ RobotHardware::RobotHardware()
 }
 
 void move(
+    RobotHardware &_hardware,
     Rs485Chassis &_chassis,
     const MoveDirection _direction,
     const double _distanceMm)
 {
+    if (_direction == MoveDirection::Rotate) {
+        rotateWithYawCorrection(_hardware, _chassis, _distanceMm);
+        return;
+    }
+
     _chassis.RunTaskTime(_direction, _distanceMm);
 }
 

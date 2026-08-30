@@ -144,6 +144,7 @@ namespace Modules {
         [[nodiscard]] bool ReadRawData(JY901PRawData &_data) const;
         [[nodiscard]] bool ReadData(JY901PData &_data) const;
         [[nodiscard]] bool ReadAngles(JY901PVector3 &_anglesDegrees) const;
+        [[nodiscard]] bool ReadYaw(float &_yawDegrees) const;
         [[nodiscard]] bool ReadQuaternion(JY901PQuaternion &_quaternion) const;
         [[nodiscard]] bool ReadVersion(uint16_t &_version) const;
 

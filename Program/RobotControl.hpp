@@ -6,6 +6,7 @@
 namespace Program {
 
 void move(
+    RobotHardware &_hardware,
     Rs485Chassis &_chassis,
     MoveDirection _direction,
     double _distanceMm);

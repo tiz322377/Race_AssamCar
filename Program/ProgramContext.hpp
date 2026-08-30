@@ -1,6 +1,7 @@
 #ifndef PROGRAM_CONTEXT_HPP
 #define PROGRAM_CONTEXT_HPP
 
+#include "Modules/Gyro/JY901P.hpp"
 #include "Peripheral/GPIO.hpp"
 #include "Peripheral/Mode.hpp"
 #include "Peripheral/TIM.hpp"
@@ -79,6 +80,7 @@ struct RobotHardware {
     NormalUart hmi;
     DmaUart camera;
     DmaUart bus;
+    Modules::JY901P attitudeSensor;
 
     NormalPwm gimbal;
     NormalPwm plate;

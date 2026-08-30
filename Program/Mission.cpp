@@ -19,20 +19,20 @@ void scanMission(
     std::array<char, 16> scannerMessage{};
     std::array<int, 12> missionData{};
 
-    move(_chassis, MoveDirection::Forward, 200.0);
+    move(_hardware, _chassis, MoveDirection::Forward, 200.0);
 
     if (_direction == QrDirection::Left) {
-        move(_chassis, MoveDirection::Left, 995.0);
+        move(_hardware, _chassis, MoveDirection::Left, 995.0);
         HAL_Delay(50);
         _hardware.scanner.ReceiveDMA(
         reinterpret_cast<uint8_t *>(scannerMessage.data()), 15);
-        move(_chassis, MoveDirection::Left, 100.0);
+        move(_hardware, _chassis, MoveDirection::Left, 100.0);
     } else {
-        move(_chassis, MoveDirection::Right, 895.0);
+        move(_hardware, _chassis, MoveDirection::Right, 895.0);
         HAL_Delay(50);
         _hardware.scanner.ReceiveDMA(
         reinterpret_cast<uint8_t *>(scannerMessage.data()), 15);
-        move(_chassis, MoveDirection::Right, 100.0);
+        move(_hardware, _chassis, MoveDirection::Right, 100.0);
     }
 
     // _hardware.scanner.ReceiveDMA(
@@ -77,9 +77,9 @@ void scanMission(
     printHmiText(_hardware, scannerMessage.data());
 
     if (_direction == QrDirection::Left) {
-        move(_chassis, MoveDirection::Right, 985.0);
+        move(_hardware, _chassis, MoveDirection::Right, 985.0);
     } else {
-        move(_chassis, MoveDirection::Right, 948.0);
+        move(_hardware, _chassis, MoveDirection::Right, 948.0);
     }
 }
 

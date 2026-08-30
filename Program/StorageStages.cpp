@@ -9,6 +9,7 @@ namespace Program {
 namespace {
 
 void moveToRoughSlot(
+    RobotHardware &_hardware,
     Rs485Chassis &_chassis,
     const uint8_t _targetSlot,
     uint8_t &_currentSlot,
@@ -20,18 +21,18 @@ void moveToRoughSlot(
 
     switch (delta) {
         case -2:
-            move(_chassis, MoveDirection::Forward, 2.0 * _slotPitchMm);
+            move(_hardware, _chassis, MoveDirection::Forward, 2.0 * _slotPitchMm);
             break;
         case -1:
-            move(_chassis, MoveDirection::Forward, _slotPitchMm);
+            move(_hardware, _chassis, MoveDirection::Forward, _slotPitchMm);
             break;
         case 0:
             break;
         case 1:
-            move(_chassis, MoveDirection::Backward, _slotPitchMm);
+            move(_hardware, _chassis, MoveDirection::Backward, _slotPitchMm);
             break;
         case 2:
-            move(_chassis, MoveDirection::Backward, 2.0 * _slotPitchMm);
+            move(_hardware, _chassis, MoveDirection::Backward, 2.0 * _slotPitchMm);
             break;
         default:
             return;
@@ -132,15 +133,16 @@ void runRoughStage(
     HAL_Delay(20);
     printHmiValue(_hardware, _batch == Batch::First ? 12 : 11);
 
-    move(_chassis, MoveDirection::Rotate, -88.0);
-    move(_chassis, MoveDirection::Forward, 1860.0);
-    move(_chassis, MoveDirection::Rotate, -88.0);
+    move(_hardware, _chassis, MoveDirection::Rotate, -88.0);
+    move(_hardware, _chassis, MoveDirection::Forward, 1860.0);
+    move(_hardware, _chassis, MoveDirection::Rotate, -88.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
         _hardware.plate.SetCompare(plateCompare[itemIndex]);
         HAL_Delay(20);
 
         moveToRoughSlot(
+            _hardware,
             _chassis,
             _mission.batches[batchIndex][itemIndex].roughSlot,
             _currentRoughSlot,
@@ -155,6 +157,7 @@ void runRoughStage(
     }
 
     moveToRoughSlot(
+        _hardware,
         _chassis,
         roughCenterSlot,
         _currentRoughSlot,
@@ -176,6 +179,7 @@ void runReplaceStage(
         HAL_Delay(20);
 
         moveToRoughSlot(
+            _hardware,
             _chassis,
             _mission.batches[batchIndex][itemIndex].roughSlot,
             _currentRoughSlot,
@@ -185,6 +189,7 @@ void runReplaceStage(
     }
 
     moveToRoughSlot(
+        _hardware,
         _chassis,
         roughCenterSlot,
         _currentRoughSlot,
@@ -208,15 +213,16 @@ void runBufferStage(
         20,
     };
 
-    move(_chassis, MoveDirection::Backward, 920.0);
-    move(_chassis, MoveDirection::Rotate, 87.0);
-    move(_chassis, MoveDirection::Backward, 910.0);
+    move(_hardware, _chassis, MoveDirection::Backward, 920.0);
+    move(_hardware, _chassis, MoveDirection::Rotate, 87.0);
+    move(_hardware, _chassis, MoveDirection::Backward, 910.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
         _hardware.plate.SetCompare(plateCompare[itemIndex]);
         HAL_Delay(20);
 
         moveToRoughSlot(
+            _hardware,
             _chassis,
             _mission.batches[batchIndex][itemIndex].roughSlot,
             _currentRoughSlot,
@@ -240,6 +246,7 @@ void runBufferStage(
     }
 
     moveToRoughSlot(
+        _hardware,
         _chassis,
         roughCenterSlot,
         _currentRoughSlot,
