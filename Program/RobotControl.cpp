@@ -86,10 +86,10 @@ void move(
     const MoveDirection _direction,
     const double _distanceMm)
 {
-    if (_direction == MoveDirection::Rotate) {
-        rotateWithYawCorrection(_hardware, _chassis, _distanceMm);
-        return;
-    }
+    // if (_direction == MoveDirection::Rotate) {
+    //     rotateWithYawCorrection(_hardware, _chassis, _distanceMm);
+    //     return;
+    // }
 
     _chassis.RunTaskTime(_direction, _distanceMm);
 }

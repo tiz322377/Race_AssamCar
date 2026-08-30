@@ -60,9 +60,9 @@ void alignRoughWithCamera(
 
     while (cameraBuffer[0] != '*') {
         if (_profile.firstReceiveDelayBeforeMs != 0) {
-            HAL_Delay(_profile.firstReceiveDelayBeforeMs);
             constexpr char message[] = "OK!\n";
             _hardware.camera.Send(message, sizeof(message), 100);
+            HAL_Delay(_profile.firstReceiveDelayBeforeMs);
         }
 
         _hardware.camera.ReceiveDMA(

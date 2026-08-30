@@ -84,8 +84,8 @@ void executeReplaceTransfer(
         100,
     };
 
-    alignRawWithCamera(_hardware, _chassis, alignment);
-    HAL_Delay(800);
+    // alignRawWithCamera(_hardware, _chassis, alignment);
+    // HAL_Delay(800);
     moveElevation(_hardware, 42.9, ElevationDirection::Down);
     HAL_Delay(500);
     _hardware.arm.SetCompare(armGrabCompare);
@@ -119,8 +119,8 @@ void runRoughStage(
     const AlignmentProfile alignment{
         lowXRate,
         lowYRate,
-        500U,
-        500U,
+        800U,
+        100U,
     };
 
     if (_batch == Batch::Second) {
@@ -133,8 +133,8 @@ void runRoughStage(
     HAL_Delay(20);
     printHmiValue(_hardware, _batch == Batch::First ? 12 : 11);
 
-    move(_hardware, _chassis, MoveDirection::Rotate, -88.0);
-    move(_hardware, _chassis, MoveDirection::Forward, 1860.0);
+    move(_hardware, _chassis, MoveDirection::Rotate, -87.0);
+    move(_hardware, _chassis, MoveDirection::Forward, 1890.0);
     move(_hardware, _chassis, MoveDirection::Rotate, -88.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {
@@ -214,7 +214,7 @@ void runBufferStage(
     };
 
     move(_hardware, _chassis, MoveDirection::Backward, 920.0);
-    move(_hardware, _chassis, MoveDirection::Rotate, 87.0);
+    move(_hardware, _chassis, MoveDirection::Rotate, 88.0);
     move(_hardware, _chassis, MoveDirection::Backward, 910.0);
 
     for (uint8_t itemIndex = 0; itemIndex < itemCount; itemIndex++) {

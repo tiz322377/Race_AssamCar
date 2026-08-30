@@ -246,18 +246,18 @@ namespace Platform::Chassis
         pluses = static_cast<uint32_t>(static_cast<double>(plusesPerCircle) * circles);
         MoveInfos infos{};
         infos.acceleration = pluses / 10 * 60 / plusesPerCircle;
-        if (infos.acceleration <= 20) {
-            infos.acceleration = 20;
+        if (infos.acceleration <= 100) {
+            infos.acceleration = 100;
         }
-        if (infos.acceleration > 30) {
-            infos.acceleration = 30;
+        if (infos.acceleration > 150) {
+            infos.acceleration = 150;
         }
         infos.velocity = pluses / 4 * 60 / plusesPerCircle;
-        if (infos.velocity <= 50) {
-            infos.velocity = 50;
-        }
-        if (infos.velocity > 70) {
+        if (infos.velocity <= 70) {
             infos.velocity = 70;
+        }
+        if (infos.velocity > 80) {
+            infos.velocity = 80;
         }
         infos.distance = pluses;
         return infos;

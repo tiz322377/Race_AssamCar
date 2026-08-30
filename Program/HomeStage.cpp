@@ -22,6 +22,9 @@ void runHomeStage(
         move(_hardware, _chassis, MoveDirection::Forward, 1100.0);
         move(_hardware, _chassis, MoveDirection::Left, 1970.0);
     }
+
+    printHmi(_hardware, "t0.txt=\"%s\"\xff\xff\xff","正确抓取：3");
+    printHmi(_hardware, "t2.txt=\"%s\"\xff\xff\xff", "正确放置：3");
 }
 
 } // namespace Program
