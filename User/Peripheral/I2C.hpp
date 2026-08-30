@@ -50,17 +50,18 @@ namespace Peripheral {
         void Receive(uint8_t * _buffer,const uint8_t _addr,const uint16_t _size,uint16_t _time = 100) const {
             HAL_I2C_Master_Receive(Port, _addr,_buffer,_size,_time);
         }
-        void MemWrite(
-                uint16_t _devAddr, uint16_t _memAddr, uint16_t _addrSize,
-            uint8_t *pData, uint16_t size, uint32_t _time = 100) const {
-            HAL_I2C_Mem_Write(Port, _devAddr, _memAddr, _addrSize, pData, size, _time);
+        HAL_StatusTypeDef MemWrite(
+            uint16_t _devAddr, uint16_t _memAddr, uint16_t _addrSize,
+            uint8_t *_data, uint16_t _size, uint32_t _time = 100) const
+        {
+            return HAL_I2C_Mem_Write(Port, _devAddr, _memAddr, _addrSize, _data, _size, _time);
         }
 
-        void MemRead(
+        HAL_StatusTypeDef MemRead(
             uint16_t _devAddr, uint16_t _memAddr, uint16_t _addrSize,
-            uint8_t *pData, uint16_t size, uint32_t _time = 100) const
+            uint8_t *_data, uint16_t _size, uint32_t _time = 100) const
         {
-            HAL_I2C_Mem_Read(Port, _devAddr, _memAddr, _addrSize, pData, size, _time);
+            return HAL_I2C_Mem_Read(Port, _devAddr, _memAddr, _addrSize, _data, _size, _time);
         }
 
 
